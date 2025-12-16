@@ -52,4 +52,9 @@ class User extends Authenticatable implements FilamentUser, HasTenants
     {
         return true;
     }
+
+    public function managedProducts(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Product::class, 'product_user');
+    }
 }

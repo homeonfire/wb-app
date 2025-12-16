@@ -33,4 +33,9 @@ class Product extends Model
     {
         return $this->hasMany(Sku::class);
     }
+
+    public function plans(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ProductPlan::class);
+    }
 }

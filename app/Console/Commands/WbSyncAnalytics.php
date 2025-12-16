@@ -8,12 +8,11 @@ use App\Services\WbService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
-use GuzzleHttp\Exception\ClientException;
 
 class WbSyncAnalytics extends Command
 {
     protected $signature = 'wb:sync-analytics {--days=3 : За сколько дней грузить}';
-    protected $description = 'Загрузка воронки (исправленные поля JSON)';
+    protected $description = 'Загрузка полной воронки продаж, финансов и стоков';
 
     public function handle()
     {
@@ -22,10 +21,11 @@ class WbSyncAnalytics extends Command
         $stores = Store::all();
         $days = (int) $this->option('days');
         
+        // WB отдает статистику с задержкой, но берем диапазон
         $dateFrom = Carbon::now()->subDays($days);
         $dateTo = Carbon::now();
 
-        $this->log("🚀 СТАРТ. Период: {$dateFrom->format('Y-m-d')} - {$dateTo->format('Y-m-d')}");
+        $this->log("🚀 СТАРТ ПОЛНОЙ ВЫГРУЗКИ. Период: {$dateFrom->format('Y-m-d')} - {$dateTo->format('Y-m-d')}");
 
         foreach ($stores as $store) {
             $this->line("----------------------------------------------------------------");
@@ -47,7 +47,7 @@ class WbSyncAnalytics extends Command
                     $dateStr = $dayStart->format('Y-m-d');
 
                     $this->line("");
-                    $this->info("📅 Дата: {$dateStr}");
+                    $this->info("📅 Обработка даты: {$dateStr}");
 
                     $page = 1;
                     $retryCount = 0;
@@ -55,14 +55,12 @@ class WbSyncAnalytics extends Command
 
                     while (!$isDayDone) {
                         try {
-                            $this->log("Запрос страницы {$page} (Попытка " . ($retryCount + 1) . ")...");
-                            
                             $params = [
                                 'limit' => 100,
                                 'page' => $page
                             ];
 
-                            $startTime = microtime(true);
+                            $this->log("Запрос страницы {$page}...");
                             
                             $response = $wb->api->Analytics()->nmReportDetail(
                                 $dayStart, 
@@ -70,29 +68,25 @@ class WbSyncAnalytics extends Command
                                 $params
                             );
                             
-                            $duration = round(microtime(true) - $startTime, 2);
-                            $this->log("✅ Ответ API получен за {$duration} сек.");
-
-                            // Сброс счетчика ошибок при успехе
-                            $retryCount = 0;
+                            $retryCount = 0; // Сброс счетчика при успехе
 
                             $cards = $response->data->cards ?? [];
                             $count = count($cards);
 
                             if ($count === 0) {
-                                $this->log("Пустой список (cards). Данные за день загружены.");
+                                $this->log("Данные закончились или отсутствуют за этот день.");
                                 $isDayDone = true;
                                 break;
                             }
 
-                            $this->log("Сохранение {$count} записей...");
+                            $this->log("Получено записей: {$count}. Сохраняем...");
                             $this->saveAnalytics($store, $cards, $dateStr);
                             
                             $isNextPage = $response->data->isNextPage ?? false;
 
                             if ($isNextPage) {
                                 $page++;
-                                $this->warn("   Есть следующая страница. Ждем 60 сек...");
+                                $this->warn("   Есть следующая страница. Ждем 60 сек (лимит WB)...");
                                 $this->waitTimer(60); 
                             } else {
                                 $isDayDone = true;
@@ -101,58 +95,92 @@ class WbSyncAnalytics extends Command
                         } catch (\Throwable $e) {
                             $msg = $e->getMessage();
                             
-                            // Ловим лимиты (429 / Too many requests)
                             if (str_contains(strtolower($msg), 'too many requests') || str_contains($msg, '429')) {
                                 $retryCount++;
-                                $this->error("🔥 ЛИМИТ ЗАПРОСОВ (Too many requests)!");
+                                $this->error("🔥 ЛИМИТ ЗАПРОСОВ (429). Попытка {$retryCount}/5");
                                 
                                 if ($retryCount > 5) {
-                                    $this->error("❌ 5 неудачных попыток. Пропускаем день.");
+                                    $this->error("❌ Слишком много ошибок. Пропускаем день.");
                                     $isDayDone = true;
                                 } else {
-                                    $sleepTime = 60 + ($retryCount * 10);
-                                    $this->waitTimer($sleepTime, "Остываем (Попытка {$retryCount}/5)");
+                                    $this->waitTimer(60 + ($retryCount * 10), "Остываем");
                                 }
                             } else {
-                                $this->error("🔴 КРИТИЧЕСКАЯ ОШИБКА: " . $msg);
-                                $isDayDone = true;
+                                $this->error("🔴 ОШИБКА API: " . $msg);
+                                $isDayDone = true; // Прерываем день при критической ошибке
                             }
                         }
                     }
 
                     $currentDate->addDay();
-
+                    
+                    // Пауза между днями, чтобы не спамить
                     if ($currentDate <= $dateTo) {
-                        $this->waitTimer(65, "Переход к след. дате");
+                        $this->waitTimer(5, "Пауза перед след. датой");
                     }
                 }
 
             } catch (\Throwable $e) {
-                $this->error("💥 Глобальная ошибка сервиса: " . $e->getMessage());
+                $this->error("💥 Глобальная ошибка магазина: " . $e->getMessage());
             }
         }
+        
+        $this->info("🏁 ГОТОВО.");
     }
 
     private function saveAnalytics(Store $store, array $cards, string $date)
     {
+        // Используем транзакцию для скорости и надежности
         DB::transaction(function () use ($store, $cards, $date) {
             foreach ($cards as $row) {
+                // Основной блок статистики
                 $stats = $row->statistics->selectedPeriod ?? null;
-                
-                // 👇 ИСПРАВЛЕННЫЙ БЛОК MAPPING'А 👇
+                // Блок конверсий
+                $conversions = $stats->conversions ?? null;
+                // Блок стоков
+                $stocks = $row->stocks ?? null;
+                // Блок объекта (предмет)
+                $object = $row->object ?? null;
+
+                if (!$stats) continue;
+
                 ProductAnalytic::updateOrCreate(
-                    ['store_id' => $store->id, 'nm_id' => $row->nmID, 'date' => $date],
                     [
-                        // Было openCard, стало openCardCount (как в JSON)
-                        'open_card_count' => $stats->openCardCount ?? 0,
-                        
-                        // Было addToCart, стало addToCartCount
+                        'store_id' => $store->id, 
+                        'nm_id' => $row->nmID, 
+                        'date' => $date
+                    ],
+                    [
+                        // Инфо
+                        'vendor_code' => $row->vendorCode ?? null,
+                        'brand_name'  => $row->brandName ?? null,
+                        'object_id'   => $object->id ?? null,
+                        'object_name' => $object->name ?? null,
+
+                        // Воронка (Количества)
+                        'open_card_count'   => $stats->openCardCount ?? 0,
                         'add_to_cart_count' => $stats->addToCartCount ?? 0,
-                        
-                        // Было orders, стало ordersCount
-                        'orders_count' => $stats->ordersCount ?? 0,
-                        
-                        'buyouts_count' => $stats->buyoutsCount ?? 0,
+                        'orders_count'      => $stats->ordersCount ?? 0,
+                        'buyouts_count'     => $stats->buyoutsCount ?? 0,
+                        'cancel_count'      => $stats->cancelCount ?? 0,
+
+                        // Финансы (Суммы)
+                        'orders_sum_rub'  => $stats->ordersSumRub ?? 0,
+                        'buyouts_sum_rub' => $stats->buyoutsSumRub ?? 0,
+                        'cancel_sum_rub'  => $stats->cancelSumRub ?? 0,
+                        'avg_price_rub'   => $stats->avgPriceRub ?? 0,
+
+                        // Средние
+                        'avg_orders_count_per_day' => $stats->avgOrdersCountPerDay ?? 0,
+
+                        // Конверсии
+                        'conversion_open_to_cart_percent'  => $conversions->addToCartPercent ?? 0,
+                        'conversion_cart_to_order_percent' => $conversions->cartToOrderPercent ?? 0,
+                        'conversion_buyouts_percent'       => $conversions->buyoutsPercent ?? 0,
+
+                        // Стоки
+                        'stocks_mp' => $stocks->stocksMp ?? 0,
+                        'stocks_wb' => $stocks->stocksWb ?? 0,
                     ]
                 );
             }

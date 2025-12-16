@@ -261,6 +261,7 @@ class ProductResource extends Resource
             // Здесь мы подключим управление размерами (SKU)
             //RelationManagers\SkusRelationManager::class,
             RelationManagers\SkuLogisticsRelationManager::class,
+            //RelationManagers\PlansRelationManager::class,
         ];
     }
 
