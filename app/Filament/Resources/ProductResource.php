@@ -14,9 +14,18 @@ use Filament\Infolists;
 use Filament\Infolists\Infolist;
 use App\Filament\Resources\ProductResource\Widgets\ProductPnLOverview;
 use App\Filament\Resources\ProductResource\Widgets\ProductSalesChart;
-use App\Filament\Resources\ProductResource\Widgets\ProductFunnelWidget; // <--- Импорт
+use App\Filament\Resources\ProductResource\Widgets\ProductFunnelWidget;
 use Filament\Tables\Enums\FiltersLayout;
 use App\Livewire\ProductAnalyticsTable;
+use Filament\Forms\Components\Repeater;
+use Filament\Forms\Components\Select;
+use Filament\Forms\Components\Section;
+use Filament\Forms\Components\Grid;
+use Filament\Infolists\Components\RepeatableEntry;
+use Filament\Infolists\Components\TextEntry;
+// 👇 Псевдонимы, чтобы не путать компоненты Формы и Просмотра
+use Filament\Infolists\Components\Grid as InfolistGrid;       
+use Filament\Infolists\Components\Section as InfolistSection;
 
 class ProductResource extends Resource
 {
@@ -27,7 +36,7 @@ class ProductResource extends Resource
     protected static ?string $modelLabel = 'Товар';
     protected static ?string $pluralModelLabel = 'Товары';
 
-    // ЭТО ВАЖНО: Привязка ресурса к текущему магазину (Tenant)
+    // Привязка ресурса к текущему магазину (Tenant)
     protected static ?string $tenantOwnershipRelationshipName = 'store';
 
     public static function form(Form $form): Form
@@ -54,6 +63,14 @@ class ProductResource extends Resource
                                 Forms\Components\TextInput::make('title')
                                     ->label('Название')
                                     ->columnSpanFull(),
+                                Forms\Components\Select::make('users')
+                                    ->label('Ответственные менеджеры')
+                                    ->relationship('users', 'name')
+                                    ->multiple()
+                                    ->preload()
+                                    ->searchable()
+                                    // 👇 Добавь это, если список упорно пустой при открытии
+                                    ->getOptionLabelFromRecordUsing(fn ($record) => $record->name),
                             ])->columns(2),
                     ])->columnSpan(2),
 
@@ -77,6 +94,40 @@ class ProductResource extends Resource
                                     ->imageEditor(),
                             ]),
                     ])->columnSpan(1),
+
+                // Здесь используем Section и Grid для ФОРМ (без префикса Infolist)
+                Section::make('Сезонность / Актуальность')
+                ->schema([
+                    Repeater::make('seasonality')
+                        ->label('Периоды актуальности')
+                        ->schema([
+                            Grid::make(2)->schema([
+                                Select::make('start_month')
+                                    ->label('С месяца')
+                                    ->options([
+                                        1 => 'Январь', 2 => 'Февраль', 3 => 'Март',
+                                        4 => 'Апрель', 5 => 'Май', 6 => 'Июнь',
+                                        7 => 'Июль', 8 => 'Август', 9 => 'Сентябрь',
+                                        10 => 'Октябрь', 11 => 'Ноябрь', 12 => 'Декабрь',
+                                    ])
+                                    ->required(),
+
+                                Select::make('end_month')
+                                    ->label('По месяц')
+                                    ->options([
+                                        1 => 'Январь', 2 => 'Февраль', 3 => 'Март',
+                                        4 => 'Апрель', 5 => 'Май', 6 => 'Июнь',
+                                        7 => 'Июль', 8 => 'Август', 9 => 'Сентябрь',
+                                        10 => 'Октябрь', 11 => 'Ноябрь', 12 => 'Декабрь',
+                                    ])
+                                    ->required(),
+                            ]),
+                        ])
+                        ->columns(1)
+                        ->defaultItems(0)
+                        ->createItemButtonLabel('Добавить период'),
+                ])
+                ->collapsible(),
             ])->columns(3);
     }
 
@@ -88,72 +139,78 @@ class ProductResource extends Resource
                     ->label('Фото')
                     ->circular(),
 
-                // Добавляем searchable() для глобального поиска
                 Tables\Columns\TextColumn::make('nm_id')
                     ->label('WB ID')
-                    ->searchable() // <--- Ищет по ID
+                    ->searchable()
                     ->sortable()
                     ->copyable(),
 
                 Tables\Columns\TextColumn::make('vendor_code')
                     ->label('Артикул')
-                    ->searchable() // <--- Ищет по Артикулу
+                    ->searchable()
                     ->sortable(),
 
                 Tables\Columns\TextColumn::make('brand')
                     ->label('Бренд')
-                    ->searchable(), // <--- Ищет по Бренду
+                    ->searchable(),
 
                 Tables\Columns\TextColumn::make('title')
                     ->label('Название')
-                    ->searchable() // <--- Ищет по Названию
+                    ->searchable()
                     ->limit(30)
-                    ->toggleable(isToggledHiddenByDefault: true), // Скрыто по умолчанию, можно включить
+                    ->toggleable(isToggledHiddenByDefault: true),
 
                 Tables\Columns\TextInputColumn::make('cost_price')
                     ->label('Себестоимость')
                     ->type('number')
                     ->rules(['numeric', 'min:0']),
                 
-                // Добавим колонки для наглядности фильтров
                 Tables\Columns\TextColumn::make('fbo_stock')
                     ->label('FBO')
                     ->getStateUsing(fn (Product $record) => $record->skus->flatMap->warehouseStocks->sum('quantity'))
                     ->sortable(query: function ($query, string $direction) {
-                        // Сортировка по связанной сумме сложная, пока оставим стандартную
                         return $query;
                     }),
+                    Tables\Columns\TextColumn::make('id')
+    ->label('Внутренний ID')
+    ->sortable()
+    ->searchable(),
             ])
             ->filters([
-                // 1. Фильтр по Бренду (Выпадающий список)
                 Tables\Filters\SelectFilter::make('brand')
                     ->label('Бренд')
                     ->options(fn () => Product::query()
-                        ->where('store_id', \Filament\Facades\Filament::getTenant()->id) // Только бренды этого магазина
+                        ->where('store_id', \Filament\Facades\Filament::getTenant()->id)
                         ->distinct()
-                        ->pluck('brand', 'brand') // key = value
+                        ->pluck('brand', 'brand')
                         ->toArray()
                     )
-                    ->searchable() // Можно вводить название бренда
-                    ->preload(), // Загружаем список сразу
+                    ->searchable()
+                    ->preload(),
 
-                // 2. Фильтр "Нет себестоимости" (Важно для P&L!)
                 Tables\Filters\Filter::make('no_cost_price')
                     ->label('❗️ Нет себестоимости')
                     ->query(fn ($query) => $query->where('cost_price', 0))
-                    ->toggle(), // Вид переключателя (Toggle)
+                    ->toggle(),
 
-                // 3. Фильтр "Наличие на WB" (Есть / Нет)
                 Tables\Filters\TernaryFilter::make('has_stock')
                     ->label('Остаток на WB')
                     ->placeholder('Все товары')
                     ->trueLabel('В наличии')
                     ->falseLabel('Закончились')
                     ->queries(
-                        // Ищем товары, у которых есть SKU, у которых есть стоки > 0
                         true: fn ($query) => $query->whereHas('skus.warehouseStocks', fn ($q) => $q->where('quantity', '>', 0)),
                         false: fn ($query) => $query->whereDoesntHave('skus.warehouseStocks', fn ($q) => $q->where('quantity', '>', 0)),
                     ),
+                Tables\Filters\Filter::make('my_products')
+                    ->label('👤 Показать мои товары')
+                    ->query(function (Builder $query) {
+                        // Ищем товары, у которых в связях (users) есть текущий ID
+                        return $query->whereHas('users', function ($q) {
+                            $q->where('users.id', auth()->id());
+                        });
+                    })
+                    ->toggle(),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
@@ -164,7 +221,6 @@ class ProductResource extends Resource
                 Tables\Actions\BulkActionGroup::make([
                     Tables\Actions\DeleteBulkAction::make(),
                     
-                    // Массовое изменение себестоимости (Бонус)
                     Tables\Actions\BulkAction::make('update_cost')
                         ->label('Задать себестоимость')
                         ->form([
@@ -182,96 +238,123 @@ class ProductResource extends Resource
     }
 
     public static function infolist(Infolist $infolist): Infolist
-{
-    return $infolist
-        ->schema([
-            // 1. Блок основной информации
-            Infolists\Components\Section::make('Карточка товара')
-                ->columns(3)
-                ->schema([
-                    // Фото
-                    Infolists\Components\ImageEntry::make('main_image_url')
-                        ->label('')
-                        ->height(200)
-                        ->columnSpan(1),
+    {
+        $months = [
+            1 => 'Январь', 2 => 'Февраль', 3 => 'Март', 4 => 'Апрель',
+            5 => 'Май', 6 => 'Июнь', 7 => 'Июль', 8 => 'Август',
+            9 => 'Сентябрь', 10 => 'Октябрь', 11 => 'Ноябрь', 12 => 'Декабрь',
+        ];
 
-                    // Данные
-                    Infolists\Components\Group::make()
-                        ->columnSpan(2)
-                        ->schema([
-                            Infolists\Components\TextEntry::make('title')
-                                ->label('Название')
-                                ->size(Infolists\Components\TextEntry\TextEntrySize::Large)
-                                ->weight('bold'),
+        return $infolist
+            ->schema([
+                // 1. Блок основной информации
+                Infolists\Components\Section::make('Карточка товара')
+                    ->columns(3)
+                    ->schema([
+                        // Фото
+                        Infolists\Components\ImageEntry::make('main_image_url')
+                            ->label('')
+                            ->height(200)
+                            ->columnSpan(1),
 
-                            Infolists\Components\Grid::make(3)
-                                ->schema([
-                                    Infolists\Components\TextEntry::make('brand')->label('Бренд'),
-                                    Infolists\Components\TextEntry::make('vendor_code')->label('Артикул продавца'),
-                                    Infolists\Components\TextEntry::make('nm_id')->label('WB ID')->copyable(),
+                        // Данные
+                        Infolists\Components\Group::make()
+                            ->columnSpan(2)
+                            ->schema([
+                                Infolists\Components\TextEntry::make('title')
+                                    ->label('Название')
+                                    ->size(Infolists\Components\TextEntry\TextEntrySize::Large)
+                                    ->weight('bold'),
+
+                                Infolists\Components\Grid::make(3)
+                                    ->schema([
+                                        Infolists\Components\TextEntry::make('brand')->label('Бренд'),
+                                        Infolists\Components\TextEntry::make('vendor_code')->label('Артикул продавца'),
+                                        Infolists\Components\TextEntry::make('nm_id')->label('WB ID')->copyable(),
+                                    ]),
+
+                                // Кнопка-ссылка на WB
+                                Infolists\Components\Actions::make([
+                                    Infolists\Components\Actions\Action::make('open_wb')
+                                        ->label('Открыть на Wildberries')
+                                        ->icon('heroicon-m-arrow-top-right-on-square')
+                                        ->url(fn (Product $record) => "https://www.wildberries.ru/catalog/{$record->nm_id}/detail.aspx")
+                                        ->openUrlInNewTab()
+                                        ->button(),
                                 ]),
-
-                            // Кнопка-ссылка на WB
-                            Infolists\Components\Actions::make([
-                                Infolists\Components\Actions\Action::make('open_wb')
-                                    ->label('Открыть на Wildberries')
-                                    ->icon('heroicon-m-arrow-top-right-on-square')
-                                    ->url(fn (Product $record) => "https://www.wildberries.ru/catalog/{$record->nm_id}/detail.aspx")
-                                    ->openUrlInNewTab()
-                                    ->button(),
+                                Infolists\Components\TextEntry::make('users.name')
+                                    ->label('Менеджеры')
+                                    ->badge()
+                                    ->color('info')
+                                    ->listWithLineBreaks() // Или ->separator(',')
+                                    ->placeholder('Нет привязанных менеджеров'),
                             ]),
-                        ]),
-                ]),
+                    ]),
 
-            // 2. Блок аналитики (Встраиваем виджеты сюда, чтобы они были ПЕРЕД размерами)
-            // 2. Блок аналитики
+                // 2. Блок аналитики
                 Infolists\Components\Section::make('P&L Аналитика')
                     ->schema([
-                        // Карточки с цифрами
                         Infolists\Components\Livewire::make(ProductPnLOverview::class)
-                            // ПРАВИЛЬНО: Функция возвращает массив
                             ->data(fn (Product $record) => ['record' => $record]) 
                             ->columnSpanFull(),
                         
-                        // График
                         Infolists\Components\Livewire::make(ProductSalesChart::class)
-                            // ПРАВИЛЬНО: Функция возвращает массив
                             ->data(fn (Product $record) => ['record' => $record])
                             ->columnSpanFull(),
                     ]),
+
                 Infolists\Components\Section::make('Воронка продаж (30 дней)')
                     ->schema([
                         Infolists\Components\Livewire::make(ProductFunnelWidget::class)
                             ->data(fn (Product $record) => ['record' => $record])
                             ->columnSpanFull(),
                     ]),
+
                 Infolists\Components\Section::make('Детальная аналитика (Воронка)')
                     ->schema([
-                        // Filament позволяет встраивать Livewire компоненты напрямую
                         Infolists\Components\Livewire::make(ProductAnalyticsTable::class)
                             ->data(fn (Product $record) => ['record' => $record])
                             ->columnSpanFull(),
                     ]),
-        ]);
-}
+
+                // 3. Сезонность
+                Infolists\Components\Section::make('Сезонность / Актуальность')
+                    ->schema([
+                        RepeatableEntry::make('seasonality')
+                            ->label('') 
+                            ->schema([
+                                // 👇 ИСПОЛЬЗУЕМ InfolistGrid ВМЕСТО Grid 👇
+                                InfolistGrid::make(2)->schema([
+                                    TextEntry::make('start_month')
+                                        ->label('С месяца')
+                                        ->formatStateUsing(fn ($state) => $months[$state] ?? $state),
+                                    
+                                    TextEntry::make('end_month')
+                                        ->label('По месяц')
+                                        ->formatStateUsing(fn ($state) => $months[$state] ?? $state),
+                                ]),
+                            ])
+                            ->grid(2)
+                            ->columnSpanFull(),
+                    ])
+                    ->collapsible(),       
+            ]);
+    }
 
     public static function getRelations(): array
     {
         return [
-            // Здесь мы подключим управление размерами (SKU)
-            //RelationManagers\SkusRelationManager::class,
             RelationManagers\SkuLogisticsRelationManager::class,
-            //RelationManagers\PlansRelationManager::class,
         ];
     }
 
     public static function getPages(): array
-{
-    return [
-        'index' => Pages\ListProducts::route('/'),
-        'create' => Pages\CreateProduct::route('/create'),
-        'edit' => Pages\EditProduct::route('/{record}/edit'),
-        'view' => Pages\ViewProduct::route('/{record}'), // <--- ДОБАВИЛИ ЭТУ СТРОКУ
-    ];
-}
+    {
+        return [
+            'index' => Pages\ListProducts::route('/'),
+            'create' => Pages\CreateProduct::route('/create'),
+            'edit' => Pages\EditProduct::route('/{record}/edit'),
+            'view' => Pages\ViewProduct::route('/{record}'),
+        ];
+    }
 }
