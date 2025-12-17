@@ -11,6 +11,7 @@ use Illuminate\Foundation\Auth\User as Authenticatable;
 use Illuminate\Notifications\Notifiable;
 use Illuminate\Support\Collection;
 use Spatie\Permission\Traits\HasRoles; // <--- 1. Добавили импорт
+use App\Models\Product;
 
 class User extends Authenticatable implements FilamentUser, HasTenants
 {
@@ -54,6 +55,12 @@ class User extends Authenticatable implements FilamentUser, HasTenants
     }
 
     public function managedProducts(): \Illuminate\Database\Eloquent\Relations\BelongsToMany
+    {
+        return $this->belongsToMany(Product::class, 'product_user');
+    }
+
+    // 👇 Добавляем вот эту связь
+    public function products(): BelongsToMany
     {
         return $this->belongsToMany(Product::class, 'product_user');
     }

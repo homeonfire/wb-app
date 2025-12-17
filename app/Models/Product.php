@@ -10,6 +10,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 // 👇 ПРАВИЛЬНЫЕ МОДЕЛИ (Singular + Raw)
 use App\Models\OrderRaw;
 use App\Models\SaleRaw;
+use App\Models\Sku; // Рекомендуется добавить импорт, хотя внутри одного namespace сработает и так
 
 class Product extends Model
 {
@@ -49,10 +50,15 @@ class Product extends Model
         return $this->hasMany(SaleRaw::class, 'nm_id', 'nm_id');
     }
 
-    // 👇 ВОТ ЭТОГО МЕТОДА НЕ ХВАТАЕТ 👇
+    // 👇 ЭТОТ МЕТОД НУЖЕН ДЛЯ РАБОТЫ ТАБЛИЦЫ (исправление ошибки)
+    public function skus(): HasMany
+    {
+        return $this->hasMany(Sku::class);
+    }
+    
+    // 👇 ВОТ ЭТОГО МЕТОДА НЕ ХВАТАЕТ (вы его уже добавили ранее)
     public function store(): BelongsTo
     {
         return $this->belongsTo(Store::class);
     }
-    // 👆
 }

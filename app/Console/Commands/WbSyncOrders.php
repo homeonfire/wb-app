@@ -20,11 +20,11 @@ class WbSyncOrders extends Command
 
     public function handle()
     {
+        // ... (начало то же самое) ...
         date_default_timezone_set('Europe/Moscow');
-
         $storeId = $this->option('store');
 
-        // Логика выбора магазинов
+        // Логика выбора магазинов (оставляем как было)
         if ($storeId) {
             $stores = Store::where('id', $storeId)->get();
             if ($stores->isEmpty()) {
@@ -46,7 +46,7 @@ class WbSyncOrders extends Command
             }
 
             try {
-                // 1. ОПРЕДЕЛЯЕМ СТАРТОВУЮ ДАТУ
+                // 1. ОПРЕДЕЛЯЕМ СТАРТОВУЮ ДАТУ (оставляем как было)
                 $lastOrder = OrderRaw::where('store_id', $store->id)
                     ->orderBy('last_change_date', 'desc')
                     ->first();
@@ -94,48 +94,69 @@ class WbSyncOrders extends Command
                         break;
                     }
 
+                    // --- 🔥 ГЛАВНОЕ ИЗМЕНЕНИЕ: ПОДГОТОВКА МАССИВА ---
+                    $upsertData = [];
                     $maxLastChangeDate = null;
+                    $now = now(); // Чтобы updated_at был одинаковый у пачки
 
-                    foreach (array_chunk($orders, 500) as $chunk) {
-                        DB::transaction(function () use ($chunk, $store, &$maxLastChangeDate) {
-                            foreach ($chunk as $item) {
-                                OrderRaw::updateOrCreate(
-                                    ['srid' => $item->srid],
-                                    [
-                                        'store_id' => $store->id,
-                                        'order_date' => $item->date,
-                                        'last_change_date' => $item->lastChangeDate,
-                                        'nm_id' => $item->nmId,
-                                        'barcode' => $item->barcode,
-                                        'total_price' => $item->totalPrice,
-                                        'discount_percent' => $item->discountPercent,
-                                        'warehouse_name' => $item->warehouseName,
-                                        'oblast_okrug_name' => $item->oblastOkrugName,
-                                        'finished_price' => $item->finishedPrice,
-                                        'is_cancel' => $item->isCancel,
-                                        'cancel_dt' => $item->cancelDate,
-                                    ]
-                                );
+                    foreach ($orders as $item) {
+                        // Собираем данные в простой массив
+                        $upsertData[] = [
+                            'srid'              => $item->srid,
+                            'store_id'          => $store->id,
+                            'order_date'        => $item->date,
+                            'last_change_date'  => $item->lastChangeDate,
+                            'nm_id'             => $item->nmId,
+                            'barcode'           => $item->barcode,
+                            'total_price'       => $item->totalPrice,
+                            'discount_percent'  => $item->discountPercent,
+                            'warehouse_name'    => $item->warehouseName,
+                            'oblast_okrug_name' => $item->oblastOkrugName,
+                            'finished_price'    => $item->finishedPrice,
+                            'is_cancel'         => $item->isCancel,
+                            'cancel_dt'         => $item->cancelDate,
+                            'created_at'        => $now, // upsert требует заполнения таймстампов
+                            'updated_at'        => $now,
+                        ];
 
-                                $itemChangeDate = Carbon::parse($item->lastChangeDate);
-                                if (!$maxLastChangeDate || $itemChangeDate->gt($maxLastChangeDate)) {
-                                    $maxLastChangeDate = $itemChangeDate;
-                                }
-                            }
-                        });
+                        // Вычисляем макс дату для следующего цикла
+                        $itemChangeDate = Carbon::parse($item->lastChangeDate);
+                        if (!$maxLastChangeDate || $itemChangeDate->gt($maxLastChangeDate)) {
+                            $maxLastChangeDate = $itemChangeDate;
+                        }
+                    }
+
+                    // --- 🔥 ВСТАВКА ПАЧКАМИ ПО 1000 ---
+                    // Разбиваем массив на куски по 1000, чтобы не превысить лимиты Postgres
+                    foreach (array_chunk($upsertData, 1000) as $chunk) {
+                        OrderRaw::upsert(
+                            $chunk, 
+                            ['srid'], // ⚠️ Уникальный ключ (Unique Key) в твоей таблице
+                            [
+                                // Поля, которые нужно ОБНОВИТЬ, если запись уже есть
+                                'last_change_date', 
+                                'total_price', 
+                                'discount_percent', 
+                                'finished_price', 
+                                'is_cancel', 
+                                'cancel_dt', 
+                                'updated_at',
+                                'warehouse_name',
+                                'oblast_okrug_name'
+                            ]
+                        );
                     }
 
                     $totalLoaded += $count;
-                    $this->log("💾 Сохранено. Итого за сессию: {$totalLoaded}");
+                    $this->log("💾 Сохранено (Upsert). Итого за сессию: {$totalLoaded}");
 
-                    // 3. СДВИГАЕМ ДАТУ
+                    // 3. СДВИГАЕМ ДАТУ (оставляем как было)
                     if ($maxLastChangeDate) {
                         if ($maxLastChangeDate->lte($currentDateFrom)) {
                              $newDate = $currentDateFrom->addSecond();
                         } else {
                              $newDate = $maxLastChangeDate;
                         }
-
                         $this->line("   ➡️ Следующий запрос с: " . $newDate->format('Y-m-d H:i:s'));
                         $currentDateFrom = $newDate;
                     } else {
