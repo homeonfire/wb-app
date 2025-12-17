@@ -11,6 +11,7 @@ use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use App\Models\OrderRaw;
 use App\Models\SaleRaw;
 use App\Models\Sku; // Рекомендуется добавить импорт, хотя внутри одного namespace сработает и так
+use App\Models\ProductPlan;
 
 class Product extends Model
 {

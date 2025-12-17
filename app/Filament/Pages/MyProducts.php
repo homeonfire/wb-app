@@ -15,6 +15,7 @@ use App\Models\SaleRaw; // ✅ Было SalesRaw, стало SaleRaw
 use App\Models\Product;
 use App\Filament\Widgets\MyStatsWidget; 
 
+
 class MyProducts extends Page implements HasTable
 {
     use InteractsWithTable;
@@ -62,7 +63,9 @@ class MyProducts extends Page implements HasTable
     {
         return $table
             ->query(
-                Auth::user()->products()->getQuery()
+                // 🛑 Временно выводим ВСЕ товары (а не только юзера), чтобы исключить падение из-за связи
+                // Если сработает, значит проблема в Auth::user()->products()
+                \App\Models\Product::query()->limit(5)
             )
             ->columns([
                 ImageColumn::make('main_image_url')
@@ -76,31 +79,23 @@ class MyProducts extends Page implements HasTable
                     ->limit(30)
                     ->description(fn (Product $record) => $record->vendor_code),
 
-                // ПЛАН / ФАКТ
-                TextColumn::make('plan_fact')
-                    ->label('План / Факт')
-                    ->default('Нет данных')
+                TextColumn::make('test_debug')
+                    ->label('ДЕБАГ')
                     ->state(function (Product $record) {
                         
-                        // ФАКТ (Заказы)
-                        $fact = OrderRaw::where('nm_id', $record->nm_id)
-                             ->whereBetween('order_date', [$this->dateFrom, $this->dateTo])
-                             ->count();
-                        
-                        // ПЛАН
-                        $plan = $record->plans()
-                            ->where('month', $this->dateFrom->format('Y-m-d')) 
-                            ->value('orders_plan') ?? 0; // План может быть 0
+                        // 1. Проверяем, существует ли Product ID (Должен сработать)
+                        return "Товар ID: " . $record->id;
 
-                        $percent = $plan > 0 ? round(($fact / $plan) * 100) : 0;
-                        
-                        return [
-                            'fact' => $fact,
-                            'plan' => $plan,
-                            'percent' => $percent
-                        ];
-                    })
-                    ->view('filament.tables.columns.plan-fact'), // ⚠️ Файл view должен существовать!
+                        /*
+                        // 2. Если (1) сработало, то проверяем запросы к сырым данным
+                        $fact = \App\Models\OrderRaw::where('nm_id', $record->nm_id)->count();
+                        return "Заказов: " . $fact;
+
+                        // 3. Если (2) сработало, проверяем ПЛАН
+                        $plan_count = $record->plans()->count();
+                        return "Планов: " . $plan_count;
+                        */
+                    }),
             ]);
     }
 }

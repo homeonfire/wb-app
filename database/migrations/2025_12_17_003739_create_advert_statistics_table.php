@@ -27,7 +27,7 @@ return new class extends Migration
             // Конверсии (если WB отдает)
             $table->integer('atbs')->default(0);     // Добавления в корзину
             $table->integer('orders')->default(0);   // Заказы
-            $table->integer('cr')->default(0);       // CR (Conversion Rate)
+            $table->float('cr')->default(0);       // CR (Conversion Rate)
             $table->integer('shks')->default(0);     // Штуки (sales count)
             $table->decimal('sum_price', 12, 2)->default(0); // Сумма заказов (если есть)
 
