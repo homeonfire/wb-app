@@ -26,6 +26,7 @@ use Filament\Infolists\Components\TextEntry;
 // 👇 Псевдонимы, чтобы не путать компоненты Формы и Просмотра
 use Filament\Infolists\Components\Grid as InfolistGrid;       
 use Filament\Infolists\Components\Section as InfolistSection;
+use Illuminate\Database\Eloquent\Builder;
 
 class ProductResource extends Resource
 {
@@ -134,6 +135,7 @@ class ProductResource extends Resource
     public static function table(Table $table): Table
     {
         return $table
+            ->modifyQueryUsing(fn (Builder $query) => $query->withCount('orders'))
             ->columns([
                 Tables\Columns\ImageColumn::make('main_image_url')
                     ->label('Фото')
@@ -149,6 +151,12 @@ class ProductResource extends Resource
                     ->label('Артикул')
                     ->searchable()
                     ->sortable(),
+
+                Tables\Columns\TextColumn::make('orders_count')
+                    ->label('Заказы')
+                    ->sortable() // Теперь сортировка работает, так как поле есть в запросе
+                    ->badge()    // (Опционально) делает цифру красивым бейджиком
+                    ->color(fn (string $state): string => $state > 0 ? 'success' : 'gray'), 
 
                 Tables\Columns\TextColumn::make('brand')
                     ->label('Бренд')
