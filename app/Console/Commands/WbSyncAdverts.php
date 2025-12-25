@@ -12,7 +12,7 @@ use Illuminate\Support\Facades\DB;
 class WbSyncAdverts extends Command
 {
     protected $signature = 'wb:sync-adverts';
-    protected $description = 'Загрузка списка рекламных кампаний (advertsList -> advertsInfoByIds)';
+    protected $description = 'Загрузка рекламных кампаний и привязка к товарам (nm_id)';
 
     public function handle()
     {
@@ -30,63 +30,48 @@ class WbSyncAdverts extends Command
             try {
                 $wb = new WbService($store);
 
-                $this->line("   📡 1. Получаем список ID кампаний (advertsList)...");
+                $this->line("   📡 1. Получаем список ID кампаний...");
                 
-                // Метод возвращает структуру, сгруппированную по типам и статусам
                 $groups = $wb->api->Adv()->advertsList(); 
-
                 $allIds = [];
                 
-                // Разбираем ответ WB
                 if (is_iterable($groups)) {
                     foreach ($groups as $group) {
-                        // $group - это объект с полями type, status, count и advert_list
-                        // Безопасно получаем список, проверяя и объект, и массив
                         $list = is_object($group) ? ($group->advert_list ?? []) : ($group['advert_list'] ?? []);
-                        
                         foreach ($list as $item) {
-                            // 👇 ИСПРАВЛЕНИЕ: WB возвращает advertId, но на всякий случай проверяем и id
-                            if (is_object($item)) {
-                                $id = $item->advertId ?? $item->id ?? null;
-                            } else {
-                                $id = $item['advertId'] ?? $item['id'] ?? null;
-                            }
-
-                            if ($id) {
-                                $allIds[] = $id;
-                            }
+                            $id = is_object($item) ? ($item->advertId ?? $item->id ?? null) : ($item['advertId'] ?? $item['id'] ?? null);
+                            if ($id) $allIds[] = $id;
                         }
                     }
                 }
                 
-                // Убираем дубли
                 $allIds = array_unique($allIds);
                 $totalCount = count($allIds);
 
                 if ($totalCount === 0) {
-                    $this->warn("   📭 Кампаний не найдено (список пуст).");
+                    $this->warn("   📭 Кампаний не найдено.");
                     continue;
                 }
 
-                $this->info("   🔍 Найдено ID: {$totalCount}. Начинаем загрузку деталей...");
+                $this->info("   🔍 Найдено ID: {$totalCount}. Загружаем детали...");
 
-                // 2. Запрашиваем детали пачками по 50 штук
                 $chunks = array_chunk($allIds, 50);
                 $processed = 0;
 
                 foreach ($chunks as $chunk) {
                     try {
-                        // Запрос деталей (advertsInfoByIds)
                         $details = $wb->api->Adv()->advertsInfoByIds($chunk);
 
                         if (!empty($details)) {
                             DB::transaction(function () use ($store, $details) {
                                 foreach ($details as $adv) {
-                                    $adv = (object) $adv; // Приводим к объекту для удобства
-
-                                    // Еще одна проверка на ID (в деталях это advertId)
+                                    $adv = (object) $adv;
                                     $advId = $adv->advertId ?? $adv->id ?? null;
+                                    
                                     if (!$advId) continue;
+
+                                    // 👇 Обновленная логика извлечения
+                                    $nmId = $this->extractNmId($adv);
 
                                     AdvertCampaign::updateOrCreate(
                                         [
@@ -100,9 +85,8 @@ class WbSyncAdverts extends Command
                                             'daily_budget' => $adv->dailyBudget ?? 0,
                                             'create_time' => isset($adv->createTime) ? Carbon::parse($adv->createTime) : null,
                                             'change_time' => isset($adv->changeTime) ? Carbon::parse($adv->changeTime) : null,
-                                            
-                                            // 👇 СОХРАНЯЕМ ВЕСЬ ОБЪЕКТ ЦЕЛИКОМ
-                                            'raw_data' => $adv, 
+                                            'raw_data' => $adv,
+                                            'nm_id' => $nmId, // ✅ Теперь должно найтись корректно
                                         ]
                                     );
                                 }
@@ -110,13 +94,12 @@ class WbSyncAdverts extends Command
                         }
 
                         $processed += count($chunk);
-                        $this->line("   ✅ Загружено {$processed} из {$totalCount}...");
-
-                        // Небольшая пауза (0.2 сек)
-                        usleep(200000);
+                        $this->line("   ✅ Обработано {$processed} из {$totalCount}...");
+                        
+                        usleep(200000); 
 
                     } catch (\Throwable $e) {
-                        $this->error("   ❌ Ошибка при обработке пачки ID: " . $e->getMessage());
+                        $this->error("   ❌ Ошибка пачки: " . $e->getMessage());
                     }
                 }
 
@@ -126,5 +109,56 @@ class WbSyncAdverts extends Command
                 $this->error("   💥 Ошибка API: " . $e->getMessage());
             }
         }
+    }
+
+    /**
+     * Универсальный метод поиска nm_id
+     */
+    private function extractNmId(object $adv): ?int
+    {
+        // 1. unitedParams (Авто, Поиск+Каталог)
+        if (!empty($adv->unitedParams) && is_array($adv->unitedParams)) {
+            foreach ($adv->unitedParams as $param) {
+                $param = (object) $param;
+                
+                // Вариант А: nms лежит сразу в параметре (как в твоем примере)
+                if (!empty($param->nms) && is_array($param->nms)) {
+                    return (int) $param->nms[0];
+                }
+
+                // Вариант Б: nms лежит внутри menus (бывает в других типах)
+                if (!empty($param->menus) && is_array($param->menus)) {
+                    foreach ($param->menus as $menu) {
+                        $menu = (object) $menu;
+                        if (!empty($menu->nms) && is_array($menu->nms)) {
+                            return (int) $menu->nms[0]; 
+                        }
+                    }
+                }
+            }
+        }
+
+        // 2. auction_multibids (часто есть в ответе)
+        if (!empty($adv->auction_multibids) && is_array($adv->auction_multibids)) {
+            $firstBid = (object) $adv->auction_multibids[0];
+            if (!empty($firstBid->nm)) {
+                return (int) $firstBid->nm;
+            }
+        }
+
+        // 3. params (старый формат)
+        if (!empty($adv->params) && is_array($adv->params)) {
+            foreach ($adv->params as $param) {
+                $param = (object) $param;
+                if (!empty($param->nms) && is_array($param->nms)) {
+                    return (int) $param->nms[0];
+                }
+                if (isset($param->nmId)) {
+                    return (int) $param->nmId;
+                }
+            }
+        }
+
+        return null;
     }
 }
