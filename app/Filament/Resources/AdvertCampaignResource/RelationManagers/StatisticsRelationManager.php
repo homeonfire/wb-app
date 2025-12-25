@@ -96,7 +96,7 @@ class StatisticsRelationManager extends RelationManager
 
                 // 9. Выручка
                 TextColumn::make('sum_price')
-                    ->label('Выручка')
+                    ->label('Заказы (руб)')
                     ->money('RUB')
                     ->sortable()
                     ->color('success'),

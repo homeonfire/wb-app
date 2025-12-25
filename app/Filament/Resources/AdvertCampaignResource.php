@@ -146,7 +146,7 @@ class AdvertCampaignResource extends Resource
                     ->placeholder('-'),
 
                 TextColumn::make('sum_price')
-                    ->label('Выручка')
+                    ->label('Заказы (руб)')
                     ->state(fn (AdvertCampaign $record) => $record->filtered_sum_price ?? $record->statistics_sum_sum_price)
                     ->money('RUB')
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_sum_price', $direction))
