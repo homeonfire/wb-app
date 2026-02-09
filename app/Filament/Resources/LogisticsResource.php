@@ -14,6 +14,8 @@ use Filament\Forms\Components\FileUpload;
 use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
+use App\Exports\LogisticsExport;
+
 // Подключаем виджет статистики
 use App\Filament\Resources\LogisticsResource\Widgets\LogisticsStatsOverview;
 
@@ -229,6 +231,14 @@ class LogisticsResource extends Resource
                     ->modalContent(fn (Product $record) => view('filament.resources.logistics.sizes-modal', ['record' => $record])),
             ])
             ->headerActions([
+                // Новая кнопка экспорта
+                Tables\Actions\Action::make('export_excel')
+                    ->label('Экспорт в Excel')
+                    ->icon('heroicon-o-arrow-down-tray')
+                    ->color('success')
+                    ->action(function () {
+                        return Excel::download(new LogisticsExport, 'logistics_full_' . now()->format('Y-m-d') . '.xlsx');
+                    }),
                 // Импорт: Заказ Завод (B, D)
                 Action::make('import_factory_order')
                     ->label('Импорт "Завод"')
