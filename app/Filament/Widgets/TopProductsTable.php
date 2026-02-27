@@ -7,6 +7,7 @@ use App\Models\Product;
 use Filament\Tables;
 use Filament\Tables\Table;
 use Filament\Widgets\TableWidget as BaseWidget;
+use App\Filament\Resources\ProductResource;
 use Illuminate\Support\Facades\DB;
 use Illuminate\Support\Str;
 use Filament\Facades\Filament;
@@ -60,6 +61,18 @@ class TopProductsTable extends BaseWidget
                     ->weight('bold')
                     ->color('success'),
             ])
+            ->recordUrl(function ($record) {
+                // Ищем наш товар в БД по артикулу WB
+                $product = Product::where('nm_id', $record->nm_id)->first();
+                
+                // Если товар существует в нашей базе, возвращаем ссылку на страницу его просмотра
+                if ($product) {
+                    return ProductResource::getUrl('view', ['record' => $product]);
+                }
+                
+                // Если товара почему-то нет (например, продажа есть, а карточку еще не спарсили), строка будет некликабельной
+                return null; 
+            })
             ->paginated(false);
     }
 
