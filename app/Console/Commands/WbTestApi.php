@@ -3,16 +3,15 @@
 namespace App\Console\Commands;
 
 use App\Models\Store;
-use App\Services\WbService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
+use Illuminate\Support\Facades\Http; // 👈 Будем использовать встроенный HTTP клиент Laravel
 
 class WbTestApi extends Command
 {
-    // Название команды для запуска из консоли
     protected $signature = 'wb:test-api';
     
-    protected $description = 'Тестовая выгрузка аналитики (nmReportDetail) за 1 день для первого магазина в JSON';
+    protected $description = 'Тестовая выгрузка воронки продаж (v3) через прямой HTTP-запрос';
 
     public function handle()
     {
@@ -32,30 +31,60 @@ class WbTestApi extends Command
             return 1;
         }
 
+        // Для v3 требуются даты в формате YYYY-MM-DD
+        // Возьмем вчерашний день для текущего периода (selectedPeriod)
+        $date = Carbon::now()->subDay();
+        $startDate = $date->format('Y-m-d');
+        $endDate = $date->format('Y-m-d');
+
+        // Для прошлого периода (pastPeriod) API WB обычно просит аналогичный промежуток.
+        // Возьмем тот же день, но ровно год назад.
+        $pastStartDate = $date->copy()->subYear()->format('Y-m-d');
+        $pastEndDate = $date->copy()->subYear()->format('Y-m-d');
+
+        $this->warn("📅 Запрашиваем данные за: {$startDate}");
+
+        // Формируем тело запроса строго по документации v3
+        $payload = [
+            'selectedPeriod' => [
+                'start' => $startDate,
+                'end'   => $endDate,
+            ],
+            'pastPeriod' => [
+                'start' => $pastStartDate,
+                'end'   => $pastEndDate,
+            ],
+            'limit'  => 5, // Ограничиваем 5 товарами для теста
+            'offset' => 0,
+        ];
+
         try {
-            $wb = new WbService($store);
+            $this->info("🚀 Отправка POST запроса к API v3...");
 
-            // Берем вчерашний день (чтобы данные за день были уже полностью сформированы)
-            $date = Carbon::now()->subDay();
-            $start = $date->copy()->startOfDay();
-            $end = $date->copy()->endOfDay();
+            // Выполняем прямой запрос, минуя библиотеку Dakword
+            $response = Http::withHeaders([
+                'Authorization' => $store->api_key_standard,
+                'Content-Type'  => 'application/json',
+                'Accept'        => 'application/json',
+            ])->post('https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products', $payload);
 
-            $this->warn("📅 Запрашиваем данные за: {$start->format('Y-m-d')}");
-
-            // Делаем запрос к API
-            $response = $wb->api->Analytics()->nmReportDetail($start, $end, [
-                'limit' => 5, // 👈 Ограничиваем 5 карточками, чтобы консоль не "улетела"
-                'page' => 1
-            ]);
-
-            // Выводим результат в виде отформатированного JSON с поддержкой русского языка
-            $this->line(json_encode($response, JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
-            
-            $this->newLine();
-            $this->info("✅ Тестовый запрос успешно выполнен!");
+            // Проверяем успешность ответа (HTTP статус 200)
+            if ($response->successful()) {
+                // Выводим результат в консоль в красивом виде
+                $this->line(json_encode($response->json(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+                
+                $this->newLine();
+                $this->info("✅ Тестовый запрос (v3) успешно выполнен!");
+            } else {
+                // Если WB вернул ошибку (400, 401, 429 и т.д.)
+                $this->error("❌ Ошибка API. HTTP Статус: {$response->status()}");
+                $this->line(json_encode($response->json(), JSON_PRETTY_PRINT | JSON_UNESCAPED_UNICODE));
+            }
 
         } catch (\Exception $e) {
-            $this->error("💥 Ошибка API: " . $e->getMessage());
+            $this->error("💥 Критическая ошибка: " . $e->getMessage());
         }
+
+        return 0;
     }
 }
