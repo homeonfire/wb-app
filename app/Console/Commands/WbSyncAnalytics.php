@@ -4,15 +4,15 @@ namespace App\Console\Commands;
 
 use App\Models\ProductAnalytic;
 use App\Models\Store;
-use App\Services\WbService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
+use Illuminate\Support\Facades\Http;
 
 class WbSyncAnalytics extends Command
 {
     protected $signature = 'wb:sync-analytics {--days=3 : За сколько дней грузить}';
-    protected $description = 'Загрузка полной воронки продаж, финансов и стоков';
+    protected $description = 'Загрузка полной воронки продаж, финансов и стоков (API v3)';
 
     public function handle()
     {
@@ -24,7 +24,7 @@ class WbSyncAnalytics extends Command
         $dateFrom = Carbon::now()->subDays($days);
         $dateTo = Carbon::now();
 
-        $this->info("🚀 СТАРТ СКРИПТА. Период: {$dateFrom->format('Y-m-d')} - {$dateTo->format('Y-m-d')}");
+        $this->info("🚀 СТАРТ СКРИПТА (API v3). Период: {$dateFrom->format('Y-m-d')} - {$dateTo->format('Y-m-d')}");
 
         foreach ($stores as $store) {
             $this->line("----------------------------------------------------------------");
@@ -36,102 +36,112 @@ class WbSyncAnalytics extends Command
             }
 
             try {
-                $wb = new WbService($store);
-                
                 $currentDate = clone $dateFrom;
                 
                 while ($currentDate <= $dateTo) {
-                    $dayStart = $currentDate->copy()->startOfDay();
-                    $dayEnd = $currentDate->copy()->endOfDay();
-                    $dateStr = $dayStart->format('Y-m-d');
+                    $dateStr = $currentDate->format('Y-m-d');
+                    
+                    // Для pastPeriod берем тот же день год назад (согласно докам WB)
+                    $pastDateStr = $currentDate->copy()->subYear()->format('Y-m-d');
 
                     $this->line("");
                     $this->info("📅 [{$dateStr}] Начинаем обработку дня");
 
-                    $page = 1;
+                    $limit = 100; // Рекомендуемый лимит для стабильной выгрузки
+                    $offset = 0;
                     $retryCount = 0;
                     $isDayDone = false;
 
                     while (!$isDayDone) {
                         try {
-                            $params = [
-                                'limit' => 100,
-                                'page' => $page
+                            $this->line("   👉 [Смещение {$offset}] Отправка запроса к API WB v3...");
+                            
+                            $payload = [
+                                'selectedPeriod' => ['start' => $dateStr, 'end' => $dateStr],
+                                'pastPeriod'     => ['start' => $pastDateStr, 'end' => $pastDateStr],
+                                'limit'          => $limit,
+                                'offset'         => $offset,
                             ];
 
-                            $this->line("   👉 [Стр. {$page}] Отправка запроса к API WB (nmReportDetail)...");
-                            
                             $startTime = microtime(true);
 
-                            // --- ЗАПРОС К API ---
-                            $response = $wb->api->Analytics()->nmReportDetail(
-                                $dayStart, 
-                                $dayEnd, 
-                                $params
-                            );
-                            // --------------------
-
+                            // --- ПРЯМОЙ HTTP ЗАПРОС ---
+                            $response = Http::withHeaders([
+                                'Authorization' => $store->api_key_standard,
+                                'Content-Type'  => 'application/json',
+                                'Accept'        => 'application/json',
+                            ])->timeout(30)->post('https://seller-analytics-api.wildberries.ru/api/analytics/v3/sales-funnel/products', $payload);
+                            
                             $duration = round(microtime(true) - $startTime, 2);
-                            $this->info("   ✅ [Стр. {$page}] Ответ получен за {$duration} сек.");
 
-                            $retryCount = 0; // Сброс счетчика ошибок при успехе
+                            // Обработка 429 Too Many Requests (Лимиты)
+                            if ($response->status() === 429) {
+                                $retryCount++;
+                                $this->error("   🔥 ОШИБКА 429 (ЛИМИТ). Попытка восстановления {$retryCount}/10");
+                                
+                                if ($retryCount > 10) {
+                                    $this->error("   ❌ Превышено максимальное кол-во попыток (10). Пропускаем день {$dateStr}.");
+                                    $isDayDone = true;
+                                    break;
+                                }
+                                
+                                // WB скидывает лимиты примерно каждую минуту. Даем паузу 60 сек + 10 сек за каждую неудачу
+                                $sleepTime = 60 + ($retryCount * 10);
+                                $this->waitTimer($sleepTime, "Остываем после 429 ошибки");
+                                continue; // Повторяем запрос с тем же offset
+                            }
 
-                            $cards = $response->data->cards ?? [];
-                            $count = count($cards);
-
-                            $this->line("   📦 [Стр. {$page}] В ответе записей: {$count}");
-
-                            if ($count === 0) {
-                                $this->warn("   ⏹️ [Стр. {$page}] Список пуст. Данные за день закончились.");
+                            // Обработка других ошибок (400, 401, 500)
+                            if (!$response->successful()) {
+                                $this->error("   🔴 ОШИБКА API HTTP: " . $response->status() . " " . $response->body());
                                 $isDayDone = true;
                                 break;
                             }
 
-                            $this->line("   💾 [Стр. {$page}] Сохраняем в БД...");
-                            $this->saveAnalytics($store, $cards, $dateStr);
-                            $this->info("   ✨ [Стр. {$page}] Сохранено.");
-                            
-                            $isNextPage = $response->data->isNextPage ?? false;
+                            $this->info("   ✅ Ответ получен за {$duration} сек.");
+                            $retryCount = 0; // Успех! Сбрасываем счетчик ошибок
 
-                            if ($isNextPage) {
-                                $page++;
-                                $this->warn("   ⏭️ Флаг isNextPage=true. Ждем 60 сек перед следующей страницей...");
-                                $this->waitTimer(60, "Лимит WB между страницами"); 
-                            } else {
-                                $this->info("   🏁 [{$dateStr}] Флаг isNextPage=false. День загружен полностью.");
+                            $data = $response->json();
+                            $products = $data['data']['products'] ?? [];
+                            $count = count($products);
+
+                            $this->line("   📦 В ответе карточек: {$count}");
+
+                            // Если вернулось меньше лимита, значит это последняя страница
+                            if ($count === 0) {
+                                $this->info("   🏁 [{$dateStr}] Данные закончились.");
                                 $isDayDone = true;
+                                break;
+                            }
+
+                            $this->line("   💾 Сохраняем в БД...");
+                            $this->saveAnalytics($store, $products, $dateStr);
+                            $this->info("   ✨ Сохранено.");
+                            
+                            // Сдвигаем окно пагинации для следующего запроса
+                            $offset += $limit;
+
+                            // Если пришло меньше лимита, следующей страницы точно нет
+                            if ($count < $limit) {
+                                $this->info("   🏁 [{$dateStr}] Выгружена последняя часть дня.");
+                                $isDayDone = true;
+                            } else {
+                                // Легкая пауза перед следующей страницей (чтобы не спамить)
+                                $this->waitTimer(2, "Пауза между страницами");
                             }
 
                         } catch (\Throwable $e) {
-                            // --- БЛОК ОБРАБОТКИ ОШИБОК ---
-                            $msg = $e->getMessage();
-                            $this->error("   🚨 ПОЙМАНО ИСКЛЮЧЕНИЕ: " . $msg);
-                            
-                            // Проверка на 429 Too Many Requests
-                            if (str_contains(strtolower($msg), 'too many requests') || str_contains($msg, '429')) {
-                                $retryCount++;
-                                $this->error("   🔥 ОШИБКА 429 (ЛИМИТ). Попытка восстановления {$retryCount}/5");
-                                
-                                if ($retryCount > 5) {
-                                    $this->error("   ❌ Превышено максимальное кол-во попыток (5). Пропускаем день {$dateStr} и идем дальше.");
-                                    $isDayDone = true;
-                                } else {
-                                    $sleepTime = 60 + ($retryCount * 10); // Увеличиваем время ожидания с каждой ошибкой
-                                    $this->waitTimer($sleepTime, "Остываем после 429 ошибки");
-                                }
-                            } else {
-                                // Другие ошибки (например 401, 500)
-                                $this->error("   🔴 КРИТИЧЕСКАЯ ОШИБКА (не 429). Прерываем обработку дня.");
-                                $isDayDone = true; 
-                            }
+                            $this->error("   🚨 КРИТИЧЕСКАЯ ОШИБКА: " . $e->getMessage());
+                            // Если упало из-за таймаута соединения, тоже уходим в паузу
+                            $this->waitTimer(30, "Пауза после ошибки соединения");
                         }
                     }
 
                     $currentDate->addDay();
                     
-                    // Пауза между сменой дат (на всякий случай)
+                    // Пауза перед следующим днем
                     if ($currentDate <= $dateTo) {
-                        $this->waitTimer(5, "Короткая пауза перед следующей датой");
+                        $this->waitTimer(3, "Короткая пауза перед следующей датой");
                     }
                 }
 
@@ -143,48 +153,51 @@ class WbSyncAnalytics extends Command
         $this->info("🏁 СКРИПТ ПОЛНОСТЬЮ ЗАВЕРШЕН.");
     }
 
-    private function saveAnalytics(Store $store, array $cards, string $date)
+    private function saveAnalytics(Store $store, array $products, string $date)
     {
-        DB::transaction(function () use ($store, $cards, $date) {
-            foreach ($cards as $row) {
-                $stats = $row->statistics->selectedPeriod ?? null;
-                $conversions = $stats->conversions ?? null;
-                $stocks = $row->stocks ?? null;
-                $object = $row->object ?? null;
+        DB::transaction(function () use ($store, $products, $date) {
+            foreach ($products as $row) {
+                // Разбираем новую структуру v3
+                $productInfo = $row['product'] ?? [];
+                $stat = $row['statistic']['selected'] ?? [];
+                $conversions = $stat['conversions'] ?? [];
+                $stocks = $productInfo['stocks'] ?? [];
 
-                if (!$stats) continue;
+                // Если nmId нет, пропускаем
+                if (empty($productInfo['nmId'])) continue;
 
                 ProductAnalytic::updateOrCreate(
                     [
                         'store_id' => $store->id, 
-                        'nm_id' => $row->nmID, 
-                        'date' => $date
+                        'nm_id'    => $productInfo['nmId'], 
+                        'date'     => $date
                     ],
                     [
-                        'vendor_code' => $row->vendorCode ?? null,
-                        'brand_name'  => $row->brandName ?? null,
-                        'object_id'   => $object->id ?? null,
-                        'object_name' => $object->name ?? null,
+                        'vendor_code' => $productInfo['vendorCode'] ?? null,
+                        'brand_name'  => $productInfo['brandName'] ?? null,
+                        'object_id'   => $productInfo['subjectId'] ?? null,
+                        'object_name' => $productInfo['subjectName'] ?? null,
 
-                        'open_card_count'   => $stats->openCardCount ?? 0,
-                        'add_to_cart_count' => $stats->addToCartCount ?? 0,
-                        'orders_count'      => $stats->ordersCount ?? 0,
-                        'buyouts_count'     => $stats->buyoutsCount ?? 0,
-                        'cancel_count'      => $stats->cancelCount ?? 0,
+                        'open_card_count'   => $stat['openCount'] ?? 0,
+                        'add_to_cart_count' => $stat['cartCount'] ?? 0,
+                        'orders_count'      => $stat['orderCount'] ?? 0,
+                        'buyouts_count'     => $stat['buyoutCount'] ?? 0,
+                        'cancel_count'      => $stat['cancelCount'] ?? 0,
 
-                        'orders_sum_rub'  => $stats->ordersSumRub ?? 0,
-                        'buyouts_sum_rub' => $stats->buyoutsSumRub ?? 0,
-                        'cancel_sum_rub'  => $stats->cancelSumRub ?? 0,
-                        'avg_price_rub'   => $stats->avgPriceRub ?? 0,
+                        'orders_sum_rub'  => $stat['orderSum'] ?? 0,
+                        'buyouts_sum_rub' => $stat['buyoutSum'] ?? 0,
+                        'cancel_sum_rub'  => $stat['cancelSum'] ?? 0,
+                        'avg_price_rub'   => $stat['avgPrice'] ?? 0,
 
-                        'avg_orders_count_per_day' => $stats->avgOrdersCountPerDay ?? 0,
+                        'avg_orders_count_per_day' => $stat['avgOrdersCountPerDay'] ?? 0,
 
-                        'conversion_open_to_cart_percent'  => $conversions->addToCartPercent ?? 0,
-                        'conversion_cart_to_order_percent' => $conversions->cartToOrderPercent ?? 0,
-                        'conversion_buyouts_percent'       => $conversions->buyoutsPercent ?? 0,
+                        'conversion_open_to_cart_percent'  => $conversions['addToCartPercent'] ?? 0,
+                        'conversion_cart_to_order_percent' => $conversions['cartToOrderPercent'] ?? 0,
+                        'conversion_buyouts_percent'       => $conversions['buyoutPercent'] ?? 0,
 
-                        'stocks_mp' => $stocks->stocksMp ?? 0,
-                        'stocks_wb' => $stocks->stocksWb ?? 0,
+                        // Остатки переехали прямо в $productInfo['stocks']
+                        'stocks_mp' => $stocks['mp'] ?? 0,
+                        'stocks_wb' => $stocks['wb'] ?? 0,
                     ]
                 );
             }
@@ -202,6 +215,6 @@ class WbSyncAnalytics extends Command
             $bar->advance();
         }
         $bar->finish();
-        $this->newLine(2);
+        $this->newLine();
     }
 }
