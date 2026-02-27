@@ -42,7 +42,14 @@ class WbSyncAnalytics extends Command
                     $dateStr = $currentDate->format('Y-m-d');
                     
                     // Для pastPeriod берем тот же день год назад (согласно докам WB)
-                    $pastDateStr = $currentDate->copy()->subYear()->format('Y-m-d');
+                    // Ограничиваем pastPeriod: WB не принимает даты старше 365 дней от СЕГОДНЯ
+                    $pastDate = $currentDate->copy()->subYear();
+                    $minDate = Carbon::now()->subDays(364);
+
+                    if ($pastDate->lt($minDate)) {
+                        $pastDate = clone $minDate;
+                    }
+                    $pastDateStr = $pastDate->format('Y-m-d');
 
                     $this->line("");
                     $this->info("📅 [{$dateStr}] Начинаем обработку дня");
