@@ -4,6 +4,7 @@ namespace App\Filament\Resources;
 
 use App\Filament\Resources\LogisticsResource\Pages;
 use App\Models\Product;
+use App\Filament\Resources\ProductResource;
 use App\Models\Sku;
 use Filament\Forms\Form;
 use Filament\Resources\Resource;
@@ -221,6 +222,21 @@ class LogisticsResource extends Resource
                     }),
             ])
             ->actions([
+                // 👇 НОВАЯ КНОПКА: ПЕРЕЙТИ К ТОВАРУ 👇
+                Tables\Actions\Action::make('go_to_product')
+                    ->label('К товару')
+                    ->icon('heroicon-o-shopping-bag')
+                    ->color('info')
+                    ->url(function ($record) {
+                        // Определяем, где лежит товар (зависит от модели таблицы Logistics)
+                        $product = $record instanceof Product ? $record : ($record->product ?? null);
+                        
+                        return $product ? ProductResource::getUrl('view', ['record' => $product]) : null;
+                    })
+                    ->visible(function ($record) {
+                        $product = $record instanceof Product ? $record : ($record->product ?? null);
+                        return $product !== null;
+                    }),
                 Tables\Actions\Action::make('view_sizes')
                     ->label('Размеры')
                     ->icon('heroicon-o-arrows-pointing-out')
