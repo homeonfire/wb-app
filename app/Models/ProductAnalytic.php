@@ -46,6 +46,10 @@ class ProductAnalytic extends Model
         'stocks_wb',
     ];
 
+    protected $casts = [
+        'date' => 'date',
+    ];
+
     public function store()
     {
         return $this->belongsTo(Store::class);
