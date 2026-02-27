@@ -16,6 +16,7 @@ use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Filters\Filter;
 use Filament\Tables\Filters\SelectFilter;
 use Carbon\Carbon;
+use App\Filament\Resources\ProductResource;
 
 class AdvertCampaignResource extends Resource
 {
@@ -227,10 +228,17 @@ class AdvertCampaignResource extends Resource
                         4 => '🆕 Готова к запуску',
                         -1 => '❌ Удалена',
                     ])
+                    ->default(9)
                     ->native(false),
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
+                Tables\Actions\Action::make('go_to_product')
+                    ->label('К товару')
+                    ->icon('heroicon-o-shopping-bag')
+                    ->color('info') // Синий цвет, чтобы выделялось
+                    ->url(fn (AdvertCampaign $record) => $record->product ? ProductResource::getUrl('view', ['record' => $record->product]) : null)
+                    ->visible(fn (AdvertCampaign $record) => $record->product !== null),
                 Tables\Actions\Action::make('wb_link')
                     ->label('WB')
                     ->icon('heroicon-m-arrow-top-right-on-square')
