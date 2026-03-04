@@ -36,4 +36,10 @@ public function stock(): \Illuminate\Database\Eloquent\Relations\HasOne
     {
         return $this->hasMany(SaleRaw::class, 'barcode', 'barcode');
     }
+
+    // НОВЫЙ МЕТОД: Связь с заказами по штрихкоду
+    public function orders(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(OrderRaw::class, 'barcode', 'barcode');
+    }
 }
