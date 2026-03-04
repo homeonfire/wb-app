@@ -76,6 +76,10 @@ class ExternalAdvertResource extends Resource
                             'telegram' => 'Telegram',
                             'instagram' => 'Instagram',
                             'vk' => 'VK',
+                            'youtube' => 'YouTube',
+                            'tiktok' => 'TikTok',
+                            'dzen' => 'Яндекс Дзен',
+                            'pinterest' => 'Pinterest',
                         ])
                         ->required(),
 
@@ -128,15 +132,22 @@ class ExternalAdvertResource extends Resource
                     ->label('Площадка')
                     ->badge()
                     ->color(fn (string $state): string => match ($state) {
-                        'telegram' => 'info',
-                        'instagram' => 'danger',
-                        'vk' => 'primary',
+                        'telegram' => 'info',          // Голубой
+                        'vk' => 'primary',             // Синий
+                        'instagram', 'youtube' => 'danger', // Красный
+                        'dzen' => 'warning',           // Желтый
+                        'tiktok' => 'gray',            // Серый
+                        'pinterest' => 'success',      // Зеленый (или любой другой)
                         default => 'secondary',
                     })
                     ->formatStateUsing(fn (string $state): string => match ($state) {
                         'telegram' => 'Telegram',
                         'instagram' => 'Instagram',
                         'vk' => 'VK',
+                        'youtube' => 'YouTube',
+                        'tiktok' => 'TikTok',
+                        'dzen' => 'Дзен',
+                        'pinterest' => 'Pinterest',
                         default => $state,
                     }),
 
