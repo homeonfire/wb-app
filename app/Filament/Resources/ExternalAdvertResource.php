@@ -27,17 +27,16 @@ class ExternalAdvertResource extends Resource
                 Forms\Components\Section::make('Основная информация')->schema([
                     Forms\Components\Select::make('product_id')
                         ->label('Артикул (Товар)')
-                        ->options(Product::pluck('vendor_code', 'id'))
+                        ->relationship('product', 'vendor_code') // <--- Filament сам подставит только товары текущего магазина
                         ->searchable()
                         ->preload()
                         ->required()
-                        ->live() // Делает поле реактивным
+                        ->live()
                         ->afterStateUpdated(function ($state, callable $set) {
                             if (!$state) {
                                 $set('product_price', null);
                                 return;
                             }
-                            // При выборе артикула берем цену его первого размера из БД
                             $product = Product::with('skus')->find($state);
                             $price = $product?->skus->first()?->price ?? 0;
                             $set('product_price', $price);

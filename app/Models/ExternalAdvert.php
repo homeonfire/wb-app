@@ -11,6 +11,7 @@ class ExternalAdvert extends Model
     use HasFactory;
 
     protected $fillable = [
+        'store_id', // <--- Обязательно добавляем сюда
         'product_id',
         'blogger_link',
         'ad_cost',
@@ -22,12 +23,18 @@ class ExternalAdvert extends Model
     ];
 
     protected $casts = [
-        'formats' => 'array', // Автоматическая конвертация JSON <-> Array
+        'formats' => 'array',
         'release_date' => 'date',
     ];
 
     public function product(): BelongsTo
     {
         return $this->belongsTo(Product::class);
+    }
+
+    // НОВЫЙ МЕТОД: Связь с магазином
+    public function store(): BelongsTo
+    {
+        return $this->belongsTo(Store::class);
     }
 }

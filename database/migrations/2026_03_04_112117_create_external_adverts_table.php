@@ -13,14 +13,15 @@ return new class extends Migration
 {
     Schema::create('external_adverts', function (Blueprint $table) {
         $table->id();
-        $table->foreignId('product_id')->constrained()->cascadeOnDelete(); // Связь с товаром (артикулом)
+        $table->foreignId('store_id')->constrained()->cascadeOnDelete(); // <--- ДОБАВИЛИ ЭТО
+        $table->foreignId('product_id')->constrained()->cascadeOnDelete(); 
         $table->string('blogger_link');
-        $table->decimal('ad_cost', 10, 2)->default(0); // Стоимость рекламы
-        $table->decimal('ad_spent', 10, 2)->default(0); // Потрачено по факту
-        $table->string('platform'); // Telegram, Inst, VK
-        $table->json('formats'); // Массив для Сторис, Рилс и т.д.
+        $table->decimal('ad_cost', 10, 2)->default(0); 
+        $table->decimal('ad_spent', 10, 2)->default(0); 
+        $table->string('platform'); 
+        $table->json('formats'); 
         $table->date('release_date');
-        $table->string('status')->default('not_published'); // Статус по умолчанию
+        $table->string('status')->default('not_published');
         $table->timestamps();
     });
 }
