@@ -26,9 +26,10 @@ class ExternalAdvertResource extends Resource
             ->schema([
                 Forms\Components\Section::make('Основная информация')->schema([
                     Forms\Components\Select::make('product_id')
-                        ->label('Артикул (Товар)')
-                        ->relationship('product', 'vendor_code') // <--- Filament сам подставит только товары текущего магазина
-                        ->searchable()
+                        ->label('Артикул WB (nm_id)') // Поменяли название
+                        ->relationship('product', 'nm_id') // Ищем по артикулу WB
+                        ->getOptionLabelFromRecordUsing(fn (Product $record) => "{$record->nm_id} ({$record->vendor_code})") // Показываем: 12345678 (Мой Артикул)
+                        ->searchable(['nm_id', 'vendor_code']) // Ищем и по WB, и по внутреннему
                         ->preload()
                         ->required()
                         ->live()
@@ -109,11 +110,13 @@ class ExternalAdvertResource extends Resource
     {
         return $table
             ->columns([
-                Tables\Columns\TextColumn::make('product.vendor_code')
-                    ->label('Артикул')
+                Tables\Columns\TextColumn::make('product.nm_id')
+                    ->label('Артикул WB')
                     ->searchable()
                     ->sortable()
-                    ->weight('bold'),
+                    ->weight('bold')
+                    ->copyable() // Можно скопировать по клику
+                    ->copyMessage('Артикул скопирован!'), // Сообщение об успешном копировании
 
                 Tables\Columns\TextColumn::make('blogger_link')
                     ->label('Блоггер')
@@ -140,13 +143,13 @@ class ExternalAdvertResource extends Resource
                 Tables\Columns\TextColumn::make('formats')
                     ->label('Форматы')
                     ->badge()
-                    ->formatStateUsing(fn (string $state): string => match ($state) {
+                    ->formatStateUsing(fn (array $state): string => collect($state)->map(fn($item) => match ($item) {
                         'stories' => 'Сторис',
                         'reels' => 'Рилс',
                         'post' => 'Пост',
                         'video' => 'Ролик',
-                        default => $state,
-                    }),
+                        default => $item,
+                    })->join(', ')), // Исправлено для отображения массива форматов
 
                 Tables\Columns\TextColumn::make('ad_cost')
                     ->label('Стоимость')
