@@ -62,4 +62,9 @@ class Product extends Model
     {
         return $this->belongsTo(Store::class);
     }
+
+    public function externalAdverts(): \Illuminate\Database\Eloquent\Relations\HasMany
+    {
+        return $this->hasMany(ExternalAdvert::class);
+    }
 }
