@@ -186,7 +186,7 @@ class ExternalAdvertResource extends Resource
         return [
             'index' => Pages\ListExternalAdverts::route('/'),
             'create' => Pages\CreateExternalAdvert::route('/create'),
-            'edit' => Pages\Pages\EditExternalAdvert::route('/{record}/edit'),
+            'edit' => Pages\EditExternalAdvert::route('/{record}/edit'),
         ];
     }
 }
