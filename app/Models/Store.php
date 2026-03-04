@@ -6,6 +6,7 @@ use Illuminate\Database\Eloquent\Factories\HasFactory;
 use Illuminate\Database\Eloquent\Model;
 use Illuminate\Database\Eloquent\Relations\BelongsToMany;
 use Illuminate\Database\Eloquent\Relations\HasMany;
+use App\Models\ExternalAdvert;
 
 class Store extends Model
 {
@@ -27,5 +28,13 @@ class Store extends Model
     public function roles(): HasMany
     {
         return $this->hasMany(Role::class);
+    }
+
+    /**
+     * Внешняя реклама (закупы)
+     */
+    public function externalAdverts(): HasMany
+    {
+        return $this->hasMany(ExternalAdvert::class);
     }
 }
