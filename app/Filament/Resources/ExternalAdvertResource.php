@@ -143,13 +143,26 @@ class ExternalAdvertResource extends Resource
                 Tables\Columns\TextColumn::make('formats')
                     ->label('Форматы')
                     ->badge()
-                    ->formatStateUsing(fn (array $state): string => collect($state)->map(fn($item) => match ($item) {
-                        'stories' => 'Сторис',
-                        'reels' => 'Рилс',
-                        'post' => 'Пост',
-                        'video' => 'Ролик',
-                        default => $item,
-                    })->join(', ')), // Исправлено для отображения массива форматов
+                    ->formatStateUsing(function ($state): string {
+                        // 1. Если пришла строка (JSON), декодируем её в массив
+                        if (is_string($state)) {
+                            $state = json_decode($state, true) ?? [$state];
+                        }
+                        
+                        // 2. Если почему-то это всё ещё не массив, оборачиваем в массив
+                        if (!is_array($state)) {
+                            $state = (array) $state;
+                        }
+
+                        // 3. Переводим значения
+                        return collect($state)->map(fn($item) => match ($item) {
+                            'stories' => 'Сторис',
+                            'reels' => 'Рилс',
+                            'post' => 'Пост',
+                            'video' => 'Ролик',
+                            default => $item,
+                        })->filter()->join(', ');
+                    }),
 
                 Tables\Columns\TextColumn::make('ad_cost')
                     ->label('Стоимость')
