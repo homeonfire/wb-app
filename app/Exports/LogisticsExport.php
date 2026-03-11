@@ -11,16 +11,20 @@ use Maatwebsite\Excel\Concerns\WithMapping;
 
 class LogisticsExport implements FromCollection, WithHeadings, WithMapping
 {
-    protected $startDate;
-    protected $ordersStats;
-    protected $salesStats;
+    protected $startDate14;
+    protected $startDate30;
+    protected $ordersStats14;
+    protected $salesStats14;
+    protected $ordersStats30;
+    protected $salesStats30;
     protected $funnelStats;
     protected $storeId;
 
     public function __construct($storeId)
     {
         $this->storeId = $storeId;
-        $this->startDate = Carbon::now()->subDays(14);
+        $this->startDate14 = Carbon::now()->subDays(14);
+        $this->startDate30 = Carbon::now()->subDays(30);
 
         // 1. Получаем массив баркодов для текущего магазина
         $barcodes = DB::table('skus')
@@ -30,17 +34,17 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->pluck('skus.barcode')
             ->toArray();
 
-        // 2. Фактические заказы по штрихкодам
-        $this->ordersStats = DB::table('order_raws')
-            ->where('order_date', '>=', $this->startDate)
+        // 2. Фактические заказы (14 дней)
+        $this->ordersStats14 = DB::table('order_raws')
+            ->where('order_date', '>=', $this->startDate14)
             ->whereIn('barcode', $barcodes)
             ->select('barcode', DB::raw('COUNT(*) as count_orders'))
             ->groupBy('barcode')
             ->pluck('count_orders', 'barcode'); 
 
-        // 3. Фактические продажи по штрихкодам
-        $this->salesStats = DB::table('sale_raws')
-            ->where('sale_date', '>=', $this->startDate)
+        // 3. Фактические продажи и цена (14 дней)
+        $this->salesStats14 = DB::table('sale_raws')
+            ->where('sale_date', '>=', $this->startDate14)
             ->whereIn('barcode', $barcodes)
             ->select(
                 'barcode', 
@@ -51,10 +55,26 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->get()
             ->keyBy('barcode'); 
 
-        // 4. НОВОЕ: Данные воронки (Аналитика) за 14 дней. Группируем по nm_id (артикулу WB)
+        // 4. Заказы (30 дней) - для расчета процента выкупа
+        $this->ordersStats30 = DB::table('order_raws')
+            ->where('order_date', '>=', $this->startDate30)
+            ->whereIn('barcode', $barcodes)
+            ->select('barcode', DB::raw('COUNT(*) as count_orders'))
+            ->groupBy('barcode')
+            ->pluck('count_orders', 'barcode');
+
+        // 5. Продажи (30 дней) - для расчета процента выкупа
+        $this->salesStats30 = DB::table('sale_raws')
+            ->where('sale_date', '>=', $this->startDate30)
+            ->whereIn('barcode', $barcodes)
+            ->select('barcode', DB::raw('COUNT(*) as count_sales'))
+            ->groupBy('barcode')
+            ->pluck('count_sales', 'barcode');
+
+        // 6. Данные воронки (Аналитика) за 14 дней.
         $this->funnelStats = DB::table('product_analytics')
             ->where('store_id', $this->storeId)
-            ->where('date', '>=', $this->startDate)
+            ->where('date', '>=', $this->startDate14)
             ->select(
                 'nm_id',
                 DB::raw('SUM(open_card_count) as sum_open'),
@@ -88,10 +108,9 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             'К клиенту',
             'Заказали факт (14д)',
             'Выкупили факт (14д)',
-            'Процент выкупа факт',
-            'Средняя цена',
+            'Процент выкупа (30д)', // <-- Обновили заголовок
+            'Средняя цена (14д)',
             
-            // НОВЫЕ СТОЛБЦЫ
             'Открыли карточку (14д)',
             'В корзину (14д)',
             'Заказы аналитика (14д)',
@@ -115,21 +134,26 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
         $sumOrdersAnalytics = $funnel->sum_orders ?? 0;
         $sumCancel = $funnel->sum_cancel ?? 0;
 
-        // Высчитываем реальные средние конверсии за 2 недели
+        // Высчитываем реальные средние конверсии за 14 дней
         $convToCart = $sumOpen > 0 ? round(($sumCart / $sumOpen) * 100, 1) . '%' : '0%';
         $convToOrder = $sumCart > 0 ? round(($sumOrdersAnalytics / $sumCart) * 100, 1) . '%' : '0%';
 
         foreach ($product->skus as $sku) {
             $barcode = $sku->barcode ?? 'Без баркода';
 
-            $ordersCount = $this->ordersStats->get($barcode) ?? 0;
-            
-            $saleData = $this->salesStats->get($barcode);
-            $salesCount = $saleData ? ($saleData->count_sales ?? 0) : 0;
-            $avgPrice = $saleData ? ($saleData->avg_price ?? 0) : 0;
+            // Данные за 14 дней (для колонок количеств)
+            $ordersCount14 = $this->ordersStats14->get($barcode) ?? 0;
+            $saleData14 = $this->salesStats14->get($barcode);
+            $salesCount14 = $saleData14 ? ($saleData14->count_sales ?? 0) : 0;
+            $avgPrice = $saleData14 ? ($saleData14->avg_price ?? 0) : 0;
 
-            $buyoutPercent = $ordersCount > 0 
-                ? round(($salesCount / $ordersCount) * 100, 1) . '%' 
+            // Данные за 30 дней (ИСКЛЮЧИТЕЛЬНО для расчета процента)
+            $ordersCount30 = $this->ordersStats30->get($barcode) ?? 0;
+            $salesCount30 = $this->salesStats30->get($barcode) ?? 0;
+
+            // Считаем процент выкупа за 30 дней
+            $buyoutPercent30 = $ordersCount30 > 0 
+                ? round(($salesCount30 / $ordersCount30) * 100, 1) . '%' 
                 : '0%';
 
             $atFactory = $sku->stock?->at_factory ?? 0;
@@ -150,12 +174,11 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
                 $inTransitToWb,
                 $onWb,
                 $toClient,
-                $ordersCount,
-                $salesCount,
-                $buyoutPercent,
+                $ordersCount14,
+                $salesCount14,
+                $buyoutPercent30, // <- Вставляем процент за месяц
                 round($avgPrice, 2),
                 
-                // Выводим воронку (одинаковая для всех размеров одного артикула)
                 $sumOpen,
                 $sumCart,
                 $sumOrdersAnalytics,
