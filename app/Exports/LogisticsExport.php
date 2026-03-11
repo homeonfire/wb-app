@@ -14,6 +14,7 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
     protected $startDate;
     protected $ordersStats;
     protected $salesStats;
+    protected $funnelStats;
     protected $storeId;
 
     public function __construct($storeId)
@@ -21,7 +22,7 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
         $this->storeId = $storeId;
         $this->startDate = Carbon::now()->subDays(14);
 
-        // Получаем массив баркодов ТОЛЬКО для текущего магазина (для жесткой оптимизации)
+        // 1. Получаем массив баркодов для текущего магазина
         $barcodes = DB::table('skus')
             ->join('products', 'skus.product_id', '=', 'products.id')
             ->where('products.store_id', $this->storeId)
@@ -29,7 +30,7 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->pluck('skus.barcode')
             ->toArray();
 
-        // 1. Считаем заказы только по нашим баркодам
+        // 2. Фактические заказы по штрихкодам
         $this->ordersStats = DB::table('order_raws')
             ->where('order_date', '>=', $this->startDate)
             ->whereIn('barcode', $barcodes)
@@ -37,7 +38,7 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->groupBy('barcode')
             ->pluck('count_orders', 'barcode'); 
 
-        // 2. Считаем продажи и среднюю цену только по нашим баркодам
+        // 3. Фактические продажи по штрихкодам
         $this->salesStats = DB::table('sale_raws')
             ->where('sale_date', '>=', $this->startDate)
             ->whereIn('barcode', $barcodes)
@@ -49,11 +50,25 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->groupBy('barcode')
             ->get()
             ->keyBy('barcode'); 
+
+        // 4. НОВОЕ: Данные воронки (Аналитика) за 14 дней. Группируем по nm_id (артикулу WB)
+        $this->funnelStats = DB::table('product_analytics')
+            ->where('store_id', $this->storeId)
+            ->where('date', '>=', $this->startDate)
+            ->select(
+                'nm_id',
+                DB::raw('SUM(open_card_count) as sum_open'),
+                DB::raw('SUM(add_to_cart_count) as sum_cart'),
+                DB::raw('SUM(orders_count) as sum_orders'),
+                DB::raw('SUM(cancel_count) as sum_cancel')
+            )
+            ->groupBy('nm_id')
+            ->get()
+            ->keyBy('nm_id');
     }
 
     public function collection()
     {
-        // Выгружаем товары СТРОГО текущего магазина
         return Product::where('store_id', $this->storeId)
             ->with(['skus.stock', 'skus.warehouseStocks'])
             ->get();
@@ -71,10 +86,18 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             'В пути WB',
             'На WB',
             'К клиенту',
-            'Заказали (14д)',
-            'Выкупили (14д)',
-            'Процент выкупа',
+            'Заказали факт (14д)',
+            'Выкупили факт (14д)',
+            'Процент выкупа факт',
             'Средняя цена',
+            
+            // НОВЫЕ СТОЛБЦЫ
+            'Открыли карточку (14д)',
+            'В корзину (14д)',
+            'Заказы аналитика (14д)',
+            'Отмены (14д)',
+            'Конверсия в корзину',
+            'Конверсия в заказ',
         ];
     }
 
@@ -84,6 +107,18 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
     public function map($product): array
     {
         $rows = [];
+
+        // Получаем воронку для всего товара (nm_id)
+        $funnel = $this->funnelStats->get($product->nm_id);
+        $sumOpen = $funnel->sum_open ?? 0;
+        $sumCart = $funnel->sum_cart ?? 0;
+        $sumOrdersAnalytics = $funnel->sum_orders ?? 0;
+        $sumCancel = $funnel->sum_cancel ?? 0;
+
+        // Высчитываем реальные средние конверсии за 2 недели
+        $convToCart = $sumOpen > 0 ? round(($sumCart / $sumOpen) * 100, 1) . '%' : '0%';
+        $convToOrder = $sumCart > 0 ? round(($sumOrdersAnalytics / $sumCart) * 100, 1) . '%' : '0%';
+
         foreach ($product->skus as $sku) {
             $barcode = $sku->barcode ?? 'Без баркода';
 
@@ -119,6 +154,14 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
                 $salesCount,
                 $buyoutPercent,
                 round($avgPrice, 2),
+                
+                // Выводим воронку (одинаковая для всех размеров одного артикула)
+                $sumOpen,
+                $sumCart,
+                $sumOrdersAnalytics,
+                $sumCancel,
+                $convToCart,
+                $convToOrder,
             ];
         }
         return $rows;
