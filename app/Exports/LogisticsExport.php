@@ -26,7 +26,6 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
         $this->startDate14 = Carbon::now()->subDays(14);
         $this->startDate30 = Carbon::now()->subDays(30);
 
-        // 1. Получаем массив баркодов для текущего магазина
         $barcodes = DB::table('skus')
             ->join('products', 'skus.product_id', '=', 'products.id')
             ->where('products.store_id', $this->storeId)
@@ -34,7 +33,6 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->pluck('skus.barcode')
             ->toArray();
 
-        // 2. Фактические заказы (14 дней)
         $this->ordersStats14 = DB::table('order_raws')
             ->where('order_date', '>=', $this->startDate14)
             ->whereIn('barcode', $barcodes)
@@ -42,7 +40,6 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->groupBy('barcode')
             ->pluck('count_orders', 'barcode'); 
 
-        // 3. Фактические продажи и цена (14 дней)
         $this->salesStats14 = DB::table('sale_raws')
             ->where('sale_date', '>=', $this->startDate14)
             ->whereIn('barcode', $barcodes)
@@ -55,7 +52,6 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->get()
             ->keyBy('barcode'); 
 
-        // 4. Заказы (30 дней) - для расчета процента выкупа
         $this->ordersStats30 = DB::table('order_raws')
             ->where('order_date', '>=', $this->startDate30)
             ->whereIn('barcode', $barcodes)
@@ -63,7 +59,6 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->groupBy('barcode')
             ->pluck('count_orders', 'barcode');
 
-        // 5. Продажи (30 дней) - для расчета процента выкупа
         $this->salesStats30 = DB::table('sale_raws')
             ->where('sale_date', '>=', $this->startDate30)
             ->whereIn('barcode', $barcodes)
@@ -71,7 +66,7 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             ->groupBy('barcode')
             ->pluck('count_sales', 'barcode');
 
-        // 6. Данные воронки (Аналитика) за 14 дней.
+        // Расширяем запрос к воронке: добавляем расчет средней цены продавца
         $this->funnelStats = DB::table('product_analytics')
             ->where('store_id', $this->storeId)
             ->where('date', '>=', $this->startDate14)
@@ -80,7 +75,9 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
                 DB::raw('SUM(open_card_count) as sum_open'),
                 DB::raw('SUM(add_to_cart_count) as sum_cart'),
                 DB::raw('SUM(orders_count) as sum_orders'),
-                DB::raw('SUM(cancel_count) as sum_cancel')
+                DB::raw('SUM(cancel_count) as sum_cancel'),
+                // Считаем среднюю цену из воронки (игнорируя дни с нулями)
+                DB::raw('AVG(NULLIF(avg_price_rub, 0)) as avg_price_seller') 
             )
             ->groupBy('nm_id')
             ->get()
@@ -99,17 +96,20 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
         return [
             'Баркод',
             'Товар',
-            'Артикул',
-            'Фабрика',             // <--- Было 'Завод'
-            'В пути с фабрики',    // <--- Было 'Карго'
+            'Артикул продавца',
+            'Артикул WB',       
+            'Фабрика',             
+            'В пути с фабрики',    
             'Склад',
             'В пути WB',
             'На WB',
             'К клиенту',
+            'От клиента',
             'Заказали факт (14д)',
             'Выкупили факт (14д)',
-            'Процент выкупа (30д)', // <-- Обновили заголовок
-            'Средняя цена (14д)',
+            'Процент выкупа (30д)',
+            'Ср. цена (факт с СПП 14д)', // Уточнили название
+            'Ср. цена (наша без СПП 14д)', // <--- НОВАЯ КОЛОНКА
             
             'Открыли карточку (14д)',
             'В корзину (14д)',
@@ -127,31 +127,28 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
     {
         $rows = [];
 
-        // Получаем воронку для всего товара (nm_id)
         $funnel = $this->funnelStats->get($product->nm_id);
         $sumOpen = $funnel->sum_open ?? 0;
         $sumCart = $funnel->sum_cart ?? 0;
         $sumOrdersAnalytics = $funnel->sum_orders ?? 0;
         $sumCancel = $funnel->sum_cancel ?? 0;
+        // Достаем среднюю цену продавца из воронки
+        $avgPriceSeller = $funnel->avg_price_seller ?? 0;
 
-        // Высчитываем реальные средние конверсии за 14 дней
         $convToCart = $sumOpen > 0 ? round(($sumCart / $sumOpen) * 100, 1) . '%' : '0%';
         $convToOrder = $sumCart > 0 ? round(($sumOrdersAnalytics / $sumCart) * 100, 1) . '%' : '0%';
 
         foreach ($product->skus as $sku) {
             $barcode = $sku->barcode ?? 'Без баркода';
 
-            // Данные за 14 дней (для колонок количеств)
             $ordersCount14 = $this->ordersStats14->get($barcode) ?? 0;
             $saleData14 = $this->salesStats14->get($barcode);
             $salesCount14 = $saleData14 ? ($saleData14->count_sales ?? 0) : 0;
-            $avgPrice = $saleData14 ? ($saleData14->avg_price ?? 0) : 0;
+            $avgPriceFact = $saleData14 ? ($saleData14->avg_price ?? 0) : 0; // Фактическая цена (с СПП)
 
-            // Данные за 30 дней (ИСКЛЮЧИТЕЛЬНО для расчета процента)
             $ordersCount30 = $this->ordersStats30->get($barcode) ?? 0;
             $salesCount30 = $this->salesStats30->get($barcode) ?? 0;
 
-            // Считаем процент выкупа за 30 дней
             $buyoutPercent30 = $ordersCount30 > 0 
                 ? round(($salesCount30 / $ordersCount30) * 100, 1) . '%' 
                 : '0%';
@@ -163,21 +160,25 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
 
             $onWb = $sku->warehouseStocks ? $sku->warehouseStocks->sum('quantity') : 0;
             $toClient = $sku->warehouseStocks ? $sku->warehouseStocks->sum('in_way_to_client') : 0;
+            $fromClient = $sku->warehouseStocks ? $sku->warehouseStocks->sum('in_way_from_client') : 0;
 
             $rows[] = [
                 $barcode,
                 $product->title ?? '-',
                 $product->vendor_code ?? '-',
+                $product->nm_id ?? '-', 
                 $atFactory,
                 $inTransitGeneral,
                 $stockOwn,
                 $inTransitToWb,
                 $onWb,
                 $toClient,
+                $fromClient,
                 $ordersCount14,
                 $salesCount14,
-                $buyoutPercent30, // <- Вставляем процент за месяц
-                round($avgPrice, 2),
+                $buyoutPercent30, 
+                round($avgPriceFact, 2), // Цена с СПП
+                round($avgPriceSeller, 2), // <--- Ваша цена без СПП (из воронки)
                 
                 $sumOpen,
                 $sumCart,
