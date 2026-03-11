@@ -127,24 +127,26 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
     {
         $rows = [];
 
+        // Данные воронки для всего товара
         $funnel = $this->funnelStats->get($product->nm_id);
         $sumOpen = $funnel->sum_open ?? 0;
         $sumCart = $funnel->sum_cart ?? 0;
         $sumOrdersAnalytics = $funnel->sum_orders ?? 0;
         $sumCancel = $funnel->sum_cancel ?? 0;
-        // Достаем среднюю цену продавца из воронки
         $avgPriceSeller = $funnel->avg_price_seller ?? 0;
 
         $convToCart = $sumOpen > 0 ? round(($sumCart / $sumOpen) * 100, 1) . '%' : '0%';
         $convToOrder = $sumCart > 0 ? round(($sumOrdersAnalytics / $sumCart) * 100, 1) . '%' : '0%';
 
-        foreach ($product->skus as $sku) {
+        // Добавляем $index, чтобы понимать, какой это по счету размер у товара
+        foreach ($product->skus as $index => $sku) {
             $barcode = $sku->barcode ?? 'Без баркода';
+            $size = $sku->tech_size ?? '-'; 
 
             $ordersCount14 = $this->ordersStats14->get($barcode) ?? 0;
             $saleData14 = $this->salesStats14->get($barcode);
             $salesCount14 = $saleData14 ? ($saleData14->count_sales ?? 0) : 0;
-            $avgPriceFact = $saleData14 ? ($saleData14->avg_price ?? 0) : 0; // Фактическая цена (с СПП)
+            $avgPriceFact = $saleData14 ? ($saleData14->avg_price ?? 0) : 0; 
 
             $ordersCount30 = $this->ordersStats30->get($barcode) ?? 0;
             $salesCount30 = $this->salesStats30->get($barcode) ?? 0;
@@ -162,8 +164,12 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             $toClient = $sku->warehouseStocks ? $sku->warehouseStocks->sum('in_way_to_client') : 0;
             $fromClient = $sku->warehouseStocks ? $sku->warehouseStocks->sum('in_way_from_client') : 0;
 
+            // Флаг: true, если это ПЕРВЫЙ размер данного артикула
+            $isFirstSku = ($index === 0);
+
             $rows[] = [
                 $barcode,
+                $size,
                 $product->title ?? '-',
                 $product->vendor_code ?? '-',
                 $product->nm_id ?? '-', 
@@ -177,15 +183,17 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
                 $ordersCount14,
                 $salesCount14,
                 $buyoutPercent30, 
-                round($avgPriceFact, 2), // Цена с СПП
-                round($avgPriceSeller, 2), // <--- Ваша цена без СПП (из воронки)
+                round($avgPriceFact, 2), 
                 
-                $sumOpen,
-                $sumCart,
-                $sumOrdersAnalytics,
-                $sumCancel,
-                $convToCart,
-                $convToOrder,
+                // --- НИЖЕ ВЫВОДИМ ДАННЫЕ ТОЛЬКО ДЛЯ ПЕРВОЙ СТРОКИ ---
+                // Если не первая строка, выводим пустую строку ('')
+                $isFirstSku ? round($avgPriceSeller, 2) : '', 
+                $isFirstSku ? $sumOpen : '',
+                $isFirstSku ? $sumCart : '',
+                $isFirstSku ? $sumOrdersAnalytics : '',
+                $isFirstSku ? $sumCancel : '',
+                $isFirstSku ? $convToCart : '',
+                $isFirstSku ? $convToOrder : '',
             ];
         }
         return $rows;
