@@ -16,6 +16,7 @@ use Filament\Notifications\Notification;
 use Illuminate\Support\Facades\Storage;
 use Maatwebsite\Excel\Facades\Excel;
 use App\Exports\LogisticsExport;
+use Filament\Facades\Filament;
 
 // Подключаем виджет статистики
 use App\Filament\Resources\LogisticsResource\Widgets\LogisticsStatsOverview;
@@ -253,7 +254,14 @@ class LogisticsResource extends Resource
                     ->icon('heroicon-o-arrow-down-tray')
                     ->color('success')
                     ->action(function () {
-                        return Excel::download(new LogisticsExport, 'logistics_full_' . now()->format('Y-m-d') . '.xlsx');
+                        // Получаем ID текущего магазина
+                        $storeId = Filament::getTenant()->id;
+                        
+                        // Передаем его в класс экспорта
+                        return Excel::download(
+                            new LogisticsExport($storeId), 
+                            'logistics_store_' . $storeId . '_' . now()->format('Y-m-d') . '.xlsx'
+                        );
                     }),
                 // Импорт: Заказ Завод (B, D)
                 Action::make('import_factory_order')
