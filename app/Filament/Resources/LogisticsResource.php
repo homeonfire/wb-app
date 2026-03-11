@@ -56,7 +56,7 @@ class LogisticsResource extends Resource
 
                 // 1. ЗАКАЗ ЗАВОД
                 Tables\Columns\TextColumn::make('total_at_factory')
-                    ->label('Завод')
+                    ->label('Фабрика')
                     ->getStateUsing(fn (Product $record) => $record->skus->sum(fn($s) => $s->stock?->at_factory ?? 0))
                     ->alignCenter()
                     ->color('primary')
@@ -64,7 +64,7 @@ class LogisticsResource extends Resource
 
                 // 2. В ПУТИ С ЗАВОДА
                 Tables\Columns\TextColumn::make('total_in_transit_general')
-                    ->label('Карго')
+                    ->label('В пути с фабрики')
                     ->getStateUsing(fn (Product $record) => $record->skus->sum(fn($s) => $s->stock?->in_transit_general ?? 0))
                     ->alignCenter()
                     ->color('info')
@@ -140,7 +140,7 @@ class LogisticsResource extends Resource
                     ->form([
                         // ИСПОЛЬЗУЕМ Forms\Components вместо несуществующих Tables\Filters\Components
                         \Filament\Forms\Components\Grid::make(2)->schema([
-                            \Filament\Forms\Components\TextInput::make('min')->numeric()->label('Завод: от'),
+                            \Filament\Forms\Components\TextInput::make('min')->numeric()->label('Фабрика: от'),
                             \Filament\Forms\Components\TextInput::make('max')->numeric()->label('до'),
                         ]),
                     ])
@@ -154,7 +154,7 @@ class LogisticsResource extends Resource
                 Tables\Filters\Filter::make('cargo_filter')
                     ->form([
                         \Filament\Forms\Components\Grid::make(2)->schema([
-                            \Filament\Forms\Components\TextInput::make('min')->numeric()->label('Карго: от'),
+                            \Filament\Forms\Components\TextInput::make('min')->numeric()->label('В пути с фабрики: от'),
                             \Filament\Forms\Components\TextInput::make('max')->numeric()->label('до'),
                         ]),
                     ])
@@ -265,7 +265,7 @@ class LogisticsResource extends Resource
                     }),
                 // Импорт: Заказ Завод (B, D)
                 Action::make('import_factory_order')
-                    ->label('Импорт "Завод"')
+                    ->label('Импорт "Фабрика"')
                     ->icon('heroicon-o-building-office-2')
                     ->color('primary')
                     ->form([
@@ -275,7 +275,7 @@ class LogisticsResource extends Resource
 
                 // Импорт: Карго (E, F)
                 Action::make('import_factory_transit')
-                    ->label('Импорт "Карго"')
+                    ->label('Импорт "В пути с фабрики"')
                     ->icon('heroicon-o-globe-alt')
                     ->color('info')
                     ->form([

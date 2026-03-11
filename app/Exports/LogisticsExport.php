@@ -100,8 +100,8 @@ class LogisticsExport implements FromCollection, WithHeadings, WithMapping
             'Баркод',
             'Товар',
             'Артикул',
-            'Завод',
-            'Карго',
+            'Фабрика',             // <--- Было 'Завод'
+            'В пути с фабрики',    // <--- Было 'Карго'
             'Склад',
             'В пути WB',
             'На WB',
