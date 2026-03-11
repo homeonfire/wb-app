@@ -299,6 +299,7 @@ class LogisticsResource extends Resource
     }
 
     // Вынес логику импорта в отдельный метод, чтобы не дублировать код
+    // Вынес логику импорта в отдельный метод, чтобы не дублировать код
     protected static function processImport(array $data, int $barcodeIdx, int $qtyIdx, string $field)
     {
         $path = Storage::disk('local')->path($data['attachment']);
@@ -308,24 +309,47 @@ class LogisticsResource extends Resource
 
         if (empty($rows) || empty($rows[0])) return;
 
-        $updatedCount = 0;
+        // ШАГ 1: Группируем и суммируем количества по баркодам из файла
+        $groupedData = [];
+
         foreach ($rows[0] as $index => $row) {
+            // Пропускаем пустые строки или строки без нужных колонок
             if (!isset($row[$barcodeIdx]) || !isset($row[$qtyIdx])) continue;
+            
+            // Пропускаем самую первую строку (заголовок), если там текст
             if ($index === 0 && !is_numeric($row[$qtyIdx])) continue;
 
-            $barcode = (string) $row[$barcodeIdx];
-            $quantity = (int) $row[$qtyIdx];
+            $barcode = trim((string) $row[$barcodeIdx]);
+            // Приводим количество к числу (на случай если в Excel есть пробелы)
+            $quantity = (int) str_replace(' ', '', $row[$qtyIdx]);
 
             if (empty($barcode)) continue;
 
-            $sku = Sku::where('barcode', $barcode)->first();
+            // Суммируем количество для одинаковых баркодов
+            if (!isset($groupedData[$barcode])) {
+                $groupedData[$barcode] = 0;
+            }
+            $groupedData[$barcode] += $quantity;
+        }
+
+        // ШАГ 2: Пишем просуммированные данные в базу (один раз для каждого штрихкода)
+        $updatedCount = 0;
+
+        foreach ($groupedData as $barcode => $totalQuantity) {
+            $sku = current(Sku::where('barcode', $barcode)->get()->all()); // Более надежный способ получения первого элемента
+            
             if ($sku) {
-                $sku->stock()->updateOrCreate([], [$field => $quantity]);
+                // Перезаписываем текущее значение на сумму из файла
+                $sku->stock()->updateOrCreate(
+                    ['sku_id' => $sku->id], 
+                    [$field => $totalQuantity]
+                );
                 $updatedCount++;
             }
         }
+
         Storage::disk('local')->delete($data['attachment']);
-        Notification::make()->title("Обновлено записей: {$updatedCount}")->success()->send();
+        Notification::make()->title("Обновлено уникальных артикулов: {$updatedCount}")->success()->send();
     }
 
     public static function getHeaderWidgets(): array
