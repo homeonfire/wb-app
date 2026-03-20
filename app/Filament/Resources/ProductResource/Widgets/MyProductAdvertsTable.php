@@ -9,6 +9,7 @@ use App\Models\AdvertCampaign;
 use Illuminate\Support\Facades\Auth;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Actions\Action;
+use App\Filament\Resources\AdvertCampaignResource;
 
 class MyProductAdvertsTable extends BaseWidget
 {
@@ -41,6 +42,7 @@ class MyProductAdvertsTable extends BaseWidget
                     ->orderByRaw('CASE WHEN status = 9 THEN 1 ELSE 2 END')
                     ->orderByDesc('id')
             )
+            ->recordUrl(fn (AdvertCampaign $record) => AdvertCampaignResource::getUrl('view', ['record' => $record]))
             ->columns([
                 TextColumn::make('advert_id')
                     ->label('ID Кампании')

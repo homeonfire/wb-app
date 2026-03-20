@@ -19,6 +19,7 @@ use Filament\Forms\Components\DatePicker;
 use App\Filament\Widgets\MyPersonalStatsWidget;
 use App\Filament\Widgets\MyProductStocksTable;
 use App\Filament\Resources\ProductResource\Widgets\MyProductAdvertsTable;
+use App\Filament\Resources\ProductResource;
 
 class MyProducts extends Page implements HasTable
 {
@@ -45,6 +46,7 @@ class MyProducts extends Page implements HasTable
                     $query->where('users.id', Auth::id());
                 })
             )
+            ->recordUrl(fn (Product $record) => ProductResource::getUrl('view', ['record' => $record]))
             ->columns([
                 ImageColumn::make('main_image_url')
                     ->circular()

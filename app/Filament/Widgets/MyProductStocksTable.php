@@ -11,6 +11,7 @@ use Illuminate\Support\Facades\Auth;
 use Filament\Tables\Columns\TextColumn;
 use Filament\Tables\Columns\ImageColumn;
 use Filament\Tables\Actions\Action;
+use App\Filament\Resources\ProductResource;
 
 class MyProductStocksTable extends BaseWidget
 {
@@ -35,6 +36,7 @@ class MyProductStocksTable extends BaseWidget
                     })
                     ->with(['skus.stock', 'skus.warehouseStocks'])
             )
+            ->recordUrl(fn (Product $record) => ProductResource::getUrl('view', ['record' => $record]))
             ->columns([
                 ImageColumn::make('main_image_url')->circular()->label('')->width(40),
                 
