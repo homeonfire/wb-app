@@ -12,25 +12,29 @@ class ProductsCostPriceImport implements ToCollection, WithStartRow
     public function collection(Collection $rows)
     {
         foreach ($rows as $row) {
-            // Безопасно получаем значения. Если столбца нет, вернется null
-            $nmId = $row[0] ?? null;       // Столбец A (индекс 0)
-            $costPrice = $row[3] ?? null;  // Столбец D (индекс 3)
+            $nmId = $row[0] ?? null;       
+            $costPrice = $row[3] ?? null;  
 
-            // Пропускаем строку, если нет артикула, он не числовой, ИЛИ если себестоимость не указана
-            if (empty($nmId) || !is_numeric($nmId) || $costPrice === null || $costPrice === '') {
+            if (empty($nmId) || $costPrice === null || $costPrice === '') {
                 continue;
             }
 
-            // Очищаем цену (заменяем запятую на точку и приводим к числу)
             $cleanCostPrice = (float) str_replace(',', '.', (string) $costPrice);
 
-            // Обновляем товар в базе
-            Product::where('nm_id', $nmId)->update([
-                'cost_price' => $cleanCostPrice,
-            ]);
+            // Пытаемся найти товар
+            $product = Product::where('nm_id', $nmId)->first();
+
+            if ($product) {
+                // Если нашли - обновляем
+                $product->update(['cost_price' => $cleanCostPrice]);
+                \Log::info("Успешно обновлен nm_id: {$nmId}. Новая цена: {$cleanCostPrice}");
+            } else {
+                // Если НЕ нашли - пишем в лог ошибку
+                \Log::warning("Товар не найден! В Excel был nm_id: '{$nmId}'");
+            }
         }
     }
-    
+
     public function startRow(): int
     {
         return 2; // Пропускаем строку с заголовками
