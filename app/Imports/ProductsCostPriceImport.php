@@ -29,7 +29,7 @@ class ProductsCostPriceImport implements ToCollection, WithStartRow
             $cleanBasePrice = (float) $priceStr;
             
             // --- ДОБАВЛЯЕМ 300 ---
-            $finalCostPrice = $cleanBasePrice + 300;
+            $finalCostPrice = $cleanBasePrice;
             // --------------------------------
 
             // Пытаемся найти товар в базе
