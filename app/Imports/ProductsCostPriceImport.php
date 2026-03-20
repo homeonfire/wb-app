@@ -12,53 +12,38 @@ class ProductsCostPriceImport implements ToCollection, WithStartRow
 {
     public function collection(Collection $rows)
     {
-        Log::info('=== НАЧАЛО ИМПОРТА СЕБЕСТОИМОСТИ ===');
-        Log::info('Всего строк получено из Excel (без учета заголовка): ' . $rows->count());
+        foreach ($rows as $row) {
+            $nmId = $row[0] ?? null;       // Столбец A (Артикул)
+            $basePrice = $row[1] ?? null;  // Столбец B (Базовая цена)
 
-        foreach ($rows as $index => $row) {
-            // Вычисляем реальный номер строки в Excel для удобства дебага
-            // $index начинается с 0, плюс мы пропускаем 1-ю строку заголовков
-            $excelRowNumber = $index + 2; 
-
-            $nmId = $row[0] ?? null;       // Столбец A
-            $costPrice = $row[3] ?? null;  // Столбец D
-
-            Log::info("Строка Excel {$excelRowNumber}: Прочитано [nm_id => '{$nmId}', cost_price => '{$costPrice}']");
-
-            // Проверка 1: Есть ли артикул и число ли это?
-            if (empty($nmId) || !is_numeric($nmId)) {
-                Log::warning("  -> Строка {$excelRowNumber} ПРОПУЩЕНА: Артикул WB пуст или содержит буквы.");
+            // Проверяем, есть ли артикул и базовая цена
+            if (empty($nmId) || !is_numeric($nmId) || $basePrice === null || $basePrice === '') {
                 continue;
             }
 
-            // Проверка 2: Есть ли себестоимость?
-            if ($costPrice === null || $costPrice === '') {
-                Log::warning("  -> Строка {$excelRowNumber} ПРОПУЩЕНА: Себестоимость пустая.");
-                continue;
-            }
-
-            // Очищаем цену (заменяем запятую на точку и приводим к числу)
-            $cleanCostPrice = (float) str_replace(',', '.', (string) $costPrice);
+            // --- ОЧИСТКА БАЗОВОЙ ЦЕНЫ ИЗ СТОЛБЦА B ---
+            $priceStr = (string) $basePrice;
+            $priceStr = str_replace(',', '.', $priceStr);
+            $priceStr = preg_replace('/[^0-9.]/', '', $priceStr);
+            
+            $cleanBasePrice = (float) $priceStr;
+            
+            // --- ДОБАВЛЯЕМ 300 ---
+            $finalCostPrice = $cleanBasePrice + 300;
+            // --------------------------------
 
             // Пытаемся найти товар в базе
             $product = Product::where('nm_id', $nmId)->first();
 
             if ($product) {
-                $oldPrice = $product->cost_price;
-                
-                // Обновляем товар
+                // Обновляем товар новой итоговой ценой
                 $product->update([
-                    'cost_price' => $cleanCostPrice,
+                    'cost_price' => $finalCostPrice,
                 ]);
                 
-                Log::info("  -> УСПЕХ: Товар (ID: {$product->id}) обновлен. Цена: {$oldPrice} -> {$cleanCostPrice}");
-            } else {
-                // Если товара с таким nm_id нет в нашей базе
-                Log::error("  -> ОШИБКА: Товар с артикулом WB '{$nmId}' НЕ НАЙДЕН в базе данных.");
+                \Log::info("Успешно обновлен nm_id: {$nmId}. Цена из табл: {$cleanBasePrice} + 300 = Итоговая: {$finalCostPrice}");
             }
         }
-
-        Log::info('=== КОНЕЦ ИМПОРТА СЕБЕСТОИМОСТИ ===');
     }
 
     public function startRow(): int
