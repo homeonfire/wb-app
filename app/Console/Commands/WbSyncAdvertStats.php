@@ -5,7 +5,6 @@ namespace App\Console\Commands;
 use App\Models\AdvertCampaign;
 use App\Models\AdvertStatistic;
 use App\Models\Store;
-use App\Services\WbService;
 use Carbon\Carbon;
 use Illuminate\Console\Command;
 use Illuminate\Support\Facades\DB;
@@ -14,13 +13,14 @@ use Illuminate\Support\Facades\Http;
 class WbSyncAdvertStats extends Command
 {
     protected $signature = 'wb:sync-advert-stats {--days=3 : За сколько дней грузить}';
-    protected $description = 'Загрузка статистики по рекламе (только активные)';
+    protected $description = 'Загрузка статистики по рекламе (только активные) через API v3';
 
     public function handle()
     {
         $stores = Store::all();
         $days = (int) $this->option('days');
         
+        // Форматируем даты для API v3 (YYYY-MM-DD)
         $dateFrom = Carbon::now()->subDays($days)->format('Y-m-d');
         $dateTo = Carbon::now()->format('Y-m-d');
 
@@ -33,10 +33,7 @@ class WbSyncAdvertStats extends Command
                 continue;
             }
 
-            // 👇 ИЗМЕНЕНИЕ: Берем только АКТИВНЫЕ кампании (статус 9)
-            // 9 - Идут показы
-            // 11 - Пауза (исключили)
-            // 7 - Архив (исключили)
+            // Берем только АКТИВНЫЕ кампании (статус 9)
             $campaigns = AdvertCampaign::where('store_id', $store->id)
                 ->where('status', 9) 
                 ->get();
@@ -49,31 +46,26 @@ class WbSyncAdvertStats extends Command
             $campaignMap = $campaigns->keyBy('advert_id');
             $wbIds = $campaignMap->keys()->toArray();
 
-            // Разбиваем на пачки по 50 (лимит API WB комфортный)
+            // Разбиваем на пачки по 50 (лимит API WB)
             $chunks = array_chunk($wbIds, 50);
 
             foreach ($chunks as $chunkIndex => $chunkIds) {
                 $this->info("   ⏳ Запрос статистики для пачки #" . ($chunkIndex + 1) . " (кол-во: " . count($chunkIds) . ")...");
 
                 try {
-                    // Формируем payload для v2/fullstats
-                    $payload = [];
-                    foreach ($chunkIds as $id) {
-                        $payload[] = [
-                            'id' => (int) $id,
-                            'interval' => [
-                                'begin' => $dateFrom,
-                                'end'   => $dateTo,
-                            ]
-                        ];
-                    }
+                    // Формируем строку ID через запятую для GET запроса
+                    $idsString = implode(',', $chunkIds);
+                    $url = 'https://advert-api.wildberries.ru/adv/v3/fullstats';
 
-                    $url = 'https://advert-api.wildberries.ru/adv/v2/fullstats';
-
+                    // Делаем GET запрос к API v3
                     $response = Http::withHeaders([
                         'Authorization' => $store->api_key_advert,
-                        'Content-Type'  => 'application/json',
-                    ])->post($url, $payload);
+                        'Accept'        => 'application/json',
+                    ])->get($url, [
+                        'ids'       => $idsString,
+                        'beginDate' => $dateFrom,
+                        'endDate'   => $dateTo,
+                    ]);
 
                     if ($response->failed()) {
                         if ($response->status() === 429) {
@@ -96,11 +88,11 @@ class WbSyncAdvertStats extends Command
                     $this->error("   ❌ Исключение: " . $e->getMessage());
                 }
 
-                // Лимит: 1 запрос в минуту (для advert API)
+                // Лимит: 3 запроса в минуту (1 запрос в 20 секунд)
                 if ($chunkIndex < count($chunks) - 1 || $store->id !== $stores->last()->id) {
-                    $this->warn("   ⏸ Ждем 65 секунд из-за лимитов WB (1 запрос/мин)...");
-                    $this->output->progressStart(65);
-                    for ($i = 0; $i < 65; $i++) {
+                    $this->warn("   ⏸ Ждем 21 секунду из-за лимитов WB (3 запроса/мин)...");
+                    $this->output->progressStart(21);
+                    for ($i = 0; $i < 21; $i++) {
                         sleep(1);
                         $this->output->progressAdvance();
                     }
@@ -113,7 +105,6 @@ class WbSyncAdvertStats extends Command
 
     private function saveStats(array $data, $campaignMap)
     {
-        // 1. Собираем все данные в один массив, чтобы исключить дубликаты от API
         $preparedData = [];
 
         foreach ($data as $campData) {
@@ -124,31 +115,31 @@ class WbSyncAdvertStats extends Command
             $days = $campData['days'] ?? [];
 
             foreach ($days as $dayStat) {
-                // Используем объект Carbon для даты, чтобы Laravel сам привел формат к нужному виду
+                // Дата приходит в формате "2025-09-07T00:00:00Z"
                 $dateObj = Carbon::parse($dayStat['date'])->startOfDay();
-                // Ключ для уникальности: ID_кампании + Дата
                 $uniqueKey = $localCampaign->id . '_' . $dateObj->format('Y-m-d');
                 
                 $clicks = $dayStat['clicks'] ?? 0;
                 $cpc = $dayStat['cpc'] ?? 0;
-                $apiSpend = $dayStat['spend'] ?? 0;
+                
+                // 👇 ИЗМЕНЕНИЕ: В API v3 расходы лежат в поле 'sum'
+                $apiSpend = $dayStat['sum'] ?? 0;
 
-                // Логика пересчета расхода
+                // Логика пересчета расхода (страховка от багов WB)
                 if ($apiSpend == 0 && $clicks > 0 && $cpc > 0) {
                     $finalSpend = $clicks * $cpc;
                 } else {
                     $finalSpend = $apiSpend;
                 }
 
-                // Записываем в массив (если API пришлет дубль даты, мы просто перезапишем данные последними)
                 $preparedData[$uniqueKey] = [
                     'advert_campaign_id' => $localCampaign->id,
-                    'date'               => $dateObj, // Передаем объект!
+                    'date'               => $dateObj,
                     'views'              => $dayStat['views'] ?? 0,
                     'clicks'             => $clicks,
                     'ctr'                => $dayStat['ctr'] ?? 0,
                     'cpc'                => $cpc,
-                    'spend'              => $finalSpend,
+                    'spend'              => $finalSpend, // Сохраняем в нашу колонку spend
                     'atbs'               => $dayStat['atbs'] ?? 0,
                     'orders'             => $dayStat['orders'] ?? 0,
                     'cr'                 => $dayStat['cr'] ?? 0,
@@ -158,16 +149,14 @@ class WbSyncAdvertStats extends Command
             }
         }
 
-        // 2. Сохраняем только уникальные записи
         DB::transaction(function () use ($preparedData) {
             foreach ($preparedData as $row) {
                 AdvertStatistic::updateOrCreate(
                     [
-                        // Ищем строго по ID и Дате
                         'advert_campaign_id' => $row['advert_campaign_id'],
                         'date'               => $row['date']
                     ],
-                    $row // Обновляем остальные поля
+                    $row
                 );
             }
         });
