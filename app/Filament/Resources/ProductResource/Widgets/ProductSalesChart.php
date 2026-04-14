@@ -4,7 +4,6 @@ namespace App\Filament\Resources\ProductResource\Widgets;
 
 use App\Models\OrderRaw;
 use App\Models\SaleRaw;
-use App\Models\ProductAnalytic;
 use Filament\Widgets\ChartWidget;
 use Illuminate\Database\Eloquent\Model;
 use Flowframe\Trend\Trend;
@@ -14,7 +13,7 @@ class ProductSalesChart extends ChartWidget
 {
     protected static ?string $heading = 'Динамика продаж и заказов';
     protected int | string | array $columnSpan = 'full';
-    protected static ?string $maxHeight = '320px'; // Чуть увеличили высоту для "воздуха"
+    protected static ?string $maxHeight = '320px';
     
     public ?Model $record = null;
 
@@ -25,36 +24,46 @@ class ProductSalesChart extends ChartWidget
         $start = now()->subDays(30);
         $end = now();
 
+        // 1. Выручка (Продажи в рублях - ФАКТ)
         $revenue = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
             ->dateColumn('sale_date')
             ->between($start, $end)
             ->perDay()
             ->sum('price_with_disc');
 
+        // 2. Сумма заказов (Заказы в рублях - ФАКТ)
         $ordersSum = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
             ->dateColumn('order_date')
             ->between($start, $end)
             ->perDay()
             ->sum('total_price');
 
-        $funnelSalesCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
-            ->dateColumn('date')
+        // 3. Кол-во выкупов (Штуки - ФАКТ)
+        $salesCount = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
+            ->dateColumn('sale_date')
             ->between($start, $end)
             ->perDay()
-            ->sum('buyouts_count');
+            ->count();
 
-        $funnelOrdersCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
-            ->dateColumn('date')
+        // 4. Кол-во заказов (Штуки - ФАКТ)
+        $ordersCount = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
+            ->dateColumn('order_date')
             ->between($start, $end)
             ->perDay()
-            ->sum('orders_count');
+            ->count();
 
+        // 5. Высчитываем % выкупа по фактическим данным
         $buyoutPercents = [];
-        foreach ($funnelOrdersCount as $key => $order) {
+        foreach ($ordersCount as $key => $order) {
             $orderAgg = $order->aggregate;
-            $saleAgg = $funnelSalesCount[$key]->aggregate ?? 0;
+            $saleAgg = $salesCount[$key]->aggregate ?? 0;
+            
             $percent = $orderAgg > 0 ? round(($saleAgg / $orderAgg) * 100, 2) : 0;
+            
+            // Срезаем аномалии свыше 100% (когда выкупили старые заказы в день, где нет новых),
+            // чтобы шкала графика не сжималась в полоску
             if ($percent > 100) $percent = 100;
+
             $buyoutPercents[] = $percent;
         }
 
@@ -67,10 +76,9 @@ class ProductSalesChart extends ChartWidget
                     'borderColor' => '#10b981', // Зеленый
                     'backgroundColor' => 'rgba(16, 185, 129, 0.1)',
                     'fill' => true,
-                    'tension' => 0.4, // Плавная линия
-                    'pointRadius' => 0, // Прячем точки
-                    'pointHoverRadius' => 6, // Показываем при наведении
-                    'pointHitRadius' => 15,
+                    'tension' => 0.4, // Плавные изгибы линии
+                    'pointRadius' => 0, // Убираем точки (появятся при наведении)
+                    'pointHoverRadius' => 6,
                     'yAxisID' => 'y',
                     'order' => 3, 
                 ],
@@ -83,30 +91,30 @@ class ProductSalesChart extends ChartWidget
                     'tension' => 0.4,
                     'pointRadius' => 0,
                     'pointHoverRadius' => 6,
-                    'hidden' => true, // <-- СКРЫВАЕМ ПО УМОЛЧАНИЮ (чтобы не мешало)
+                    'hidden' => true, // Скрываем по умолчанию, чтобы разгрузить график
                     'yAxisID' => 'y',
                     'order' => 4,
                 ],
 
                 // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ) ---
                 [
-                    'label' => 'Выкупы воронка (шт)',
-                    'data' => $funnelSalesCount->map(fn (TrendValue $value) => $value->aggregate),
+                    'label' => 'Выкупы факт (шт)',
+                    'data' => $salesCount->map(fn (TrendValue $value) => $value->aggregate),
                     'backgroundColor' => '#f59e0b', // Оранжевый
                     'type' => 'bar', 
                     'yAxisID' => 'y1', 
                     'barPercentage' => 0.4, // Делаем столбики тоньше
-                    'borderRadius' => 4, // Слегка закругляем верхушки столбиков
+                    'borderRadius' => 4, // Скругляем углы столбиков
                     'order' => 2,
                 ],
                 [
-                    'label' => 'Заказы воронка (шт)',
-                    'data' => $funnelOrdersCount->map(fn (TrendValue $value) => $value->aggregate),
+                    'label' => 'Заказы факт (шт)',
+                    'data' => $ordersCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#8b5cf6', // Фиолетовый
                     'borderWidth' => 2,
                     'fill' => false,
                     'tension' => 0.4, // Плавная линия
-                    'pointRadius' => 0, // Прячем точки
+                    'pointRadius' => 0,
                     'pointHoverRadius' => 6,
                     'yAxisID' => 'y1',
                     'order' => 1, 
@@ -114,20 +122,20 @@ class ProductSalesChart extends ChartWidget
 
                 // --- ПРАВАЯ ШКАЛА 2 (ПРОЦЕНТЫ) ---
                 [
-                    'label' => '% выкупа (воронка)',
+                    'label' => '% выкупа (факт)',
                     'data' => $buyoutPercents,
                     'borderColor' => '#ec4899', // Розовый
                     'backgroundColor' => '#ec4899',
                     'borderWidth' => 2,
                     'fill' => false,
                     'tension' => 0.4, // Плавная линия
-                    'pointRadius' => 0, // Прячем точки
+                    'pointRadius' => 0,
                     'pointHoverRadius' => 6,
                     'yAxisID' => 'y2',
                     'order' => 0,
                 ],
             ],
-            'labels' => $revenue->map(fn (TrendValue $value) => \Carbon\Carbon::parse($value->date)->format('d.m')), // Короткая дата: 15.04
+            'labels' => $revenue->map(fn (TrendValue $value) => \Carbon\Carbon::parse($value->date)->format('d.m')), // Короткий формат даты: 15.04
         ];
     }
 
@@ -139,7 +147,7 @@ class ProductSalesChart extends ChartWidget
     protected function getOptions(): array
     {
         return [
-            // Настройки идеального тултипа (показывает все данные за день при наведении)
+            // Включаем единый тултип при наведении (показывает все метрики за день разом)
             'interaction' => [
                 'mode' => 'index',
                 'intersect' => false,
@@ -152,7 +160,7 @@ class ProductSalesChart extends ChartWidget
                     'title' => [
                         'display' => true,
                         'text' => 'Рубли (₽)',
-                        'color' => '#10b981', // Красим текст оси в цвет выручки для понятности
+                        'color' => '#10b981', // Красим текст в цвет основной линии
                     ],
                 ],
                 'y1' => [
@@ -165,7 +173,7 @@ class ProductSalesChart extends ChartWidget
                         'color' => '#8b5cf6',
                     ],
                     'grid' => [
-                        'drawOnChartArea' => false, 
+                        'drawOnChartArea' => false, // Отключаем сетку, чтобы не было "каши"
                     ],
                 ],
                 'y2' => [
