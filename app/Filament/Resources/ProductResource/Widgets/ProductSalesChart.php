@@ -4,6 +4,7 @@ namespace App\Filament\Resources\ProductResource\Widgets;
 
 use App\Models\OrderRaw;
 use App\Models\SaleRaw;
+use App\Models\ProductAnalytic; // <-- Подключаем модель воронки
 use Filament\Widgets\ChartWidget;
 use Illuminate\Database\Eloquent\Model;
 use Flowframe\Trend\Trend;
@@ -24,45 +25,43 @@ class ProductSalesChart extends ChartWidget
         $start = now()->subDays(30);
         $end = now();
 
-        // 1. Выручка (Продажи в рублях)
+        // 1. Выручка (ФАКТИЧЕСКАЯ из SaleRaw - реальные деньги)
         $revenue = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
             ->dateColumn('sale_date')
             ->between($start, $end)
             ->perDay()
             ->sum('price_with_disc');
 
-        // 2. Сумма заказов (Заказы в рублях)
+        // 2. Сумма заказов (ФАКТИЧЕСКАЯ из OrderRaw - на какую сумму заказали)
         $ordersSum = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
             ->dateColumn('order_date')
             ->between($start, $end)
             ->perDay()
             ->sum('total_price');
 
-        // 3. Кол-во выкупов (Штуки)
-        $salesCount = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
-            ->dateColumn('sale_date')
+        // 3. Кол-во выкупов (ИЗ ВОРОНКИ - сглаженные данные)
+        $salesCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
+            ->dateColumn('date')
             ->between($start, $end)
             ->perDay()
-            ->count();
+            ->sum('buyouts_count'); // В Trend используем sum(), так как берем значение из колонки
 
-        // 4. Кол-во заказов (Штуки)
-        $ordersCount = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
-            ->dateColumn('order_date')
+        // 4. Кол-во заказов (ИЗ ВОРОНКИ - сглаженные данные)
+        $ordersCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
+            ->dateColumn('date')
             ->between($start, $end)
             ->perDay()
-            ->count();
+            ->sum('orders_count');
 
-        // 5. Высчитываем % выкупа для каждого дня
+        // 5. Высчитываем корректный % выкупа по воронке
         $buyoutPercents = [];
         foreach ($ordersCount as $key => $order) {
             $orderAgg = $order->aggregate;
             $saleAgg = $salesCount[$key]->aggregate ?? 0;
             
-            // Если были заказы, считаем процент, иначе 0
             $percent = $orderAgg > 0 ? round(($saleAgg / $orderAgg) * 100, 2) : 0;
             
-            // Защита от аномалий (когда выкупов в день больше, чем заказов из-за задержек доставки)
-            // По желанию можно убрать эту проверку, если хочешь видеть спайки > 100%
+            // Срезаем аномалии WB, если они проскакивают в воронке
             if ($percent > 100) $percent = 100;
 
             $buyoutPercents[] = $percent;
@@ -70,18 +69,18 @@ class ProductSalesChart extends ChartWidget
 
         return [
             'datasets' => [
-                // --- ЛЕВАЯ ШКАЛА (ДЕНЬГИ) ---
+                // --- ЛЕВАЯ ШКАЛА (ДЕНЬГИ - ФАКТ) ---
                 [
-                    'label' => 'Выручка (₽)',
+                    'label' => 'Выручка факт (₽)',
                     'data' => $revenue->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#10b981', // Зеленый
                     'backgroundColor' => 'rgba(16, 185, 129, 0.1)',
                     'fill' => true,
-                    'yAxisID' => 'y', // Привязка к левой оси
+                    'yAxisID' => 'y',
                     'order' => 3, 
                 ],
                 [
-                    'label' => 'Сумма заказов (₽)',
+                    'label' => 'Заказы факт (₽)',
                     'data' => $ordersSum->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#3b82f6', // Синий
                     'borderDash' => [5, 5], 
@@ -90,9 +89,9 @@ class ProductSalesChart extends ChartWidget
                     'order' => 4,
                 ],
 
-                // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ) ---
+                // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ - ВОРОНКА) ---
                 [
-                    'label' => 'Выкупы (шт)',
+                    'label' => 'Выкупы воронка (шт)',
                     'data' => $salesCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#f59e0b', // Оранжевый
                     'backgroundColor' => '#f59e0b',
@@ -102,7 +101,7 @@ class ProductSalesChart extends ChartWidget
                     'order' => 2,
                 ],
                 [
-                    'label' => 'Заказы (шт)',
+                    'label' => 'Заказы воронка (шт)',
                     'data' => $ordersCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#8b5cf6', // Фиолетовый
                     'borderWidth' => 2,
@@ -112,17 +111,17 @@ class ProductSalesChart extends ChartWidget
                     'order' => 1, 
                 ],
 
-                // --- ПРАВАЯ ШКАЛА 2 (ПРОЦЕНТЫ) ---
+                // --- ПРАВАЯ ШКАЛА 2 (ПРОЦЕНТЫ - ВОРОНКА) ---
                 [
-                    'label' => 'Процент выкупа (%)',
+                    'label' => '% выкупа (воронка)',
                     'data' => $buyoutPercents,
                     'borderColor' => '#ec4899', // Розовый
                     'backgroundColor' => '#ec4899',
                     'borderWidth' => 2,
                     'pointRadius' => 3,
                     'fill' => false,
-                    'yAxisID' => 'y2', // Новая ось
-                    'order' => 0, // Самый верхний слой
+                    'yAxisID' => 'y2',
+                    'order' => 0,
                 ],
             ],
             'labels' => $revenue->map(fn (TrendValue $value) => $value->date),
@@ -167,10 +166,10 @@ class ProductSalesChart extends ChartWidget
                         'display' => true,
                         'text' => 'Процент (%)',
                     ],
-                    'min' => 0, // Ограничиваем шкалу от 0
-                    'max' => 100, // До 100% для наглядности
+                    'min' => 0, 
+                    'max' => 100, 
                     'grid' => [
-                        'drawOnChartArea' => false, // Чтобы линии сетки не превращали график в кашу
+                        'drawOnChartArea' => false, 
                     ],
                 ],
             ],
