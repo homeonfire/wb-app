@@ -17,7 +17,7 @@
 
     <div class="px-6 py-3 border-b border-gray-200 dark:border-white/10 bg-gray-50/50 dark:bg-white/[0.02] overflow-x-auto">
         <div class="flex flex-wrap gap-x-6 gap-y-2">
-            @foreach(['showOpenCard'=>'Переходы','showAddToCart'=>'В корзину','showOrders'=>'Заказы','showBuyouts'=>'Выкупы','showCrCart'=>'CR в корзину','showCrOrder'=>'CR в заказ'] as $key=>$label)
+            @foreach(['showOpenCard'=>'Переходы','showAddToCart'=>'В корзину','showOrders'=>'Заказы','showBuyouts'=>'Выкупы','showCrCart'=>'CR в корзину','showCrOrder'=>'CR в заказ', 'showBuyoutPercent'=>'% выкупа'] as $key=>$label)
                 <label class="inline-flex items-center gap-2 cursor-pointer group select-none">
                     <input wire:model.live="{{ $key }}" type="checkbox" class="rounded border-gray-300 text-primary-600 shadow-sm focus:ring-primary-500 dark:border-white/10 dark:bg-white/5 dark:text-primary-500 dark:checked:bg-primary-500 transition">
                     <span class="text-xs font-medium text-gray-600 dark:text-gray-400 group-hover:text-gray-900 dark:group-hover:text-white transition">{{ $label }}</span>

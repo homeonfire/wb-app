@@ -22,7 +22,6 @@ class ProductAnalyticsTable extends Component
     public $showBuyouts = true;
     public $showCrCart = true;
     public $showCrOrder = true;
-    public $showBuyoutPercent = true; // <-- Добавлена новая настройка
 
     public function mount(Product $record)
     {
@@ -34,7 +33,14 @@ class ProductAnalyticsTable extends Component
 
     public function render()
     {
-        // 1. Генерируем массив дат для колонок
+        // 1. Загружаем данные за период (сортируем по дате)
+        $analytics = ProductAnalytic::where('nm_id', $this->record->nm_id)
+            ->whereBetween('date', [$this->dateFrom, $this->dateTo])
+            ->orderBy('date')
+            ->get()
+            ->keyBy('date'); // Ключ массива = дата (строка)
+
+        // 2. Генерируем массив дат для колонок
         $dates = [];
         $current = Carbon::parse($this->dateFrom);
         $end = Carbon::parse($this->dateTo);
@@ -44,18 +50,10 @@ class ProductAnalyticsTable extends Component
             $current->addDay();
         }
 
-        // --- ОПТИМИЗАЦИЯ 1 ---
-        // Получаем данные 1 раз и сразу индексируем массив строковыми ключами Y-m-d.
-        // Это избавляет от тяжелого поиска (O(N)) и форматирования дат для каждой ячейки таблицы.
-        $analytics = ProductAnalytic::where('nm_id', $this->record->nm_id)
-            ->whereBetween('date', [$this->dateFrom, $this->dateTo])
-            ->get()
-            ->mapWithKeys(function ($item) {
-                // Приводим дату к строке для быстрого доступа
-                $dateStr = is_string($item->date) ? Carbon::parse($item->date)->format('Y-m-d') : $item->date->format('Y-m-d');
-                return [$dateStr => $item];
-            });
-
+        // 3. Подготовка данных для строк (с расчетом дельты)
+        // Нам нужно знать данные за "вчера" относительно старта, чтобы посчитать разницу для первого дня
+        // Но для упрощения будем считать разницу внутри текущего набора.
+        
         $data = [];
         
         // Вспомогательная функция для расчета
@@ -65,9 +63,11 @@ class ProductAnalyticsTable extends Component
             $prevValue = null;
 
             foreach ($dates as $dateStr) {
-                // --- ОПТИМИЗАЦИЯ 2 ---
-                // Моментальный доступ к данным дня по ключу (O(1))
-                $dayRecord = $analytics->get($dateStr);
+                // Преобразуем дату из БД (она может быть Carbon object) в строку Y-m-d
+                // В keyBy('date') ключи могут быть строками Y-m-d H:i:s, приведем к Y-m-d
+                // Проще искать в коллекции
+                
+                $dayRecord = $analytics->first(fn($item) => $item->date->format('Y-m-d') === $dateStr);
                 
                 $value = $dayRecord ? $calcValueFn($dayRecord) : 0;
                 $total += $value;
@@ -85,58 +85,35 @@ class ProductAnalyticsTable extends Component
             return ['total' => $total, 'days' => $row];
         };
 
-        // --- ОПТИМИЗАЦИЯ 3: Чистые тоталы ---
-        // Сохраняем общие суммы для правильного вычисления "ИТОГО" в процентах
-        $totalsRaw = []; 
+        // --- СТРОКИ ТАБЛИЦЫ ---
 
         if ($this->showOpenCard) {
             $data['Переходы'] = $processMetric('open_card', fn($r) => $r->open_card_count);
-            $totalsRaw['open_card'] = $data['Переходы']['total'];
         }
         if ($this->showAddToCart) {
             $data['В корзину'] = $processMetric('add_to_cart', fn($r) => $r->add_to_cart_count);
-            $totalsRaw['add_to_cart'] = $data['В корзину']['total'];
         }
         if ($this->showOrders) {
             $data['Заказы, шт'] = $processMetric('orders', fn($r) => $r->orders_count);
-            $totalsRaw['orders'] = $data['Заказы, шт']['total'];
         }
         if ($this->showBuyouts) {
             $data['Выкупы, шт'] = $processMetric('buyouts', fn($r) => $r->buyouts_count);
-            $totalsRaw['buyouts'] = $data['Выкупы, шт']['total'];
         }
         
-        // --- РАСЧЕТ ПРОЦЕНТНЫХ МЕТРИК ---
-
+        // Для % нельзя просто суммировать Total, считаем среднее или пересчитываем
         if ($this->showCrCart) {
             $data['Конверсия в корзину, %'] = $processMetric('cr_cart', function($r) {
                 return $r->open_card_count > 0 ? round(($r->add_to_cart_count / $r->open_card_count) * 100, 2) : 0;
             });
-            // Правильный подсчет тотала (Суммарные корзины / Суммарные переходы)
-            $data['Конверсия в корзину, %']['total'] = ($totalsRaw['open_card'] ?? 0) > 0 
-                ? round((($totalsRaw['add_to_cart'] ?? 0) / $totalsRaw['open_card']) * 100, 2) 
-                : 0;
+            // Total для конверсии - это среднее
+            $data['Конверсия в корзину, %']['total'] = count($dates) > 0 ? round($data['Конверсия в корзину, %']['total'] / count($dates), 2) : 0;
         }
 
         if ($this->showCrOrder) {
             $data['Конверсия в заказ, %'] = $processMetric('cr_order', function($r) {
                 return $r->add_to_cart_count > 0 ? round(($r->orders_count / $r->add_to_cart_count) * 100, 2) : 0;
             });
-            // Правильный подсчет тотала
-            $data['Конверсия в заказ, %']['total'] = ($totalsRaw['add_to_cart'] ?? 0) > 0 
-                ? round((($totalsRaw['orders'] ?? 0) / $totalsRaw['add_to_cart']) * 100, 2) 
-                : 0;
-        }
-
-        // 👇 ДОБАВЛЕННЫЙ ПРОЦЕНТ ВЫКУПА 👇
-        if ($this->showBuyoutPercent) {
-            $data['Процент выкупа, %'] = $processMetric('buyout_percent', function($r) {
-                return $r->orders_count > 0 ? round(($r->buyouts_count / $r->orders_count) * 100, 2) : 0;
-            });
-            // Итоговый процент выкупа за весь период
-            $data['Процент выкупа, %']['total'] = ($totalsRaw['orders'] ?? 0) > 0 
-                ? round((($totalsRaw['buyouts'] ?? 0) / $totalsRaw['orders']) * 100, 2) 
-                : 0;
+            $data['Конверсия в заказ, %']['total'] = count($dates) > 0 ? round($data['Конверсия в заказ, %']['total'] / count($dates), 2) : 0;
         }
 
         return view('livewire.product-analytics-table', [
