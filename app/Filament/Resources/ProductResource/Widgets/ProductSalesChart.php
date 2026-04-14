@@ -52,6 +52,22 @@ class ProductSalesChart extends ChartWidget
             ->perDay()
             ->count();
 
+        // 5. Высчитываем % выкупа для каждого дня
+        $buyoutPercents = [];
+        foreach ($ordersCount as $key => $order) {
+            $orderAgg = $order->aggregate;
+            $saleAgg = $salesCount[$key]->aggregate ?? 0;
+            
+            // Если были заказы, считаем процент, иначе 0
+            $percent = $orderAgg > 0 ? round(($saleAgg / $orderAgg) * 100, 2) : 0;
+            
+            // Защита от аномалий (когда выкупов в день больше, чем заказов из-за задержек доставки)
+            // По желанию можно убрать эту проверку, если хочешь видеть спайки > 100%
+            if ($percent > 100) $percent = 100;
+
+            $buyoutPercents[] = $percent;
+        }
+
         return [
             'datasets' => [
                 // --- ЛЕВАЯ ШКАЛА (ДЕНЬГИ) ---
@@ -62,38 +78,51 @@ class ProductSalesChart extends ChartWidget
                     'backgroundColor' => 'rgba(16, 185, 129, 0.1)',
                     'fill' => true,
                     'yAxisID' => 'y', // Привязка к левой оси
-                    'order' => 2, // Слои (чтобы не перекрывало)
+                    'order' => 3, 
                 ],
                 [
                     'label' => 'Сумма заказов (₽)',
                     'data' => $ordersSum->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#3b82f6', // Синий
-                    'borderDash' => [5, 5], // Пунктирная линия
+                    'borderDash' => [5, 5], 
                     'fill' => false,
                     'yAxisID' => 'y',
-                    'order' => 3,
+                    'order' => 4,
                 ],
 
-                // --- ПРАВАЯ ШКАЛА (ШТУКИ) ---
+                // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ) ---
                 [
                     'label' => 'Выкупы (шт)',
                     'data' => $salesCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#f59e0b', // Оранжевый
                     'backgroundColor' => '#f59e0b',
-                    'type' => 'bar', // Столбики для штук нагляднее
-                    'yAxisID' => 'y1', // Привязка к правой оси
+                    'type' => 'bar', 
+                    'yAxisID' => 'y1', 
                     'barPercentage' => 0.5,
-                    'order' => 1,
+                    'order' => 2,
                 ],
                 [
                     'label' => 'Заказы (шт)',
                     'data' => $ordersCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#8b5cf6', // Фиолетовый
                     'borderWidth' => 2,
-                    'pointRadius' => 4, // Точки пожирнее
+                    'pointRadius' => 4, 
                     'fill' => false,
                     'yAxisID' => 'y1',
-                    'order' => 0, // Поверх всего
+                    'order' => 1, 
+                ],
+
+                // --- ПРАВАЯ ШКАЛА 2 (ПРОЦЕНТЫ) ---
+                [
+                    'label' => 'Процент выкупа (%)',
+                    'data' => $buyoutPercents,
+                    'borderColor' => '#ec4899', // Розовый
+                    'backgroundColor' => '#ec4899',
+                    'borderWidth' => 2,
+                    'pointRadius' => 3,
+                    'fill' => false,
+                    'yAxisID' => 'y2', // Новая ось
+                    'order' => 0, // Самый верхний слой
                 ],
             ],
             'labels' => $revenue->map(fn (TrendValue $value) => $value->date),
@@ -102,10 +131,9 @@ class ProductSalesChart extends ChartWidget
 
     protected function getType(): string
     {
-        return 'line'; // Базовый тип (мы миксуем его с bar внутри datasets)
+        return 'line';
     }
 
-    // Настройка осей (Левая - Рубли, Правая - Штуки)
     protected function getOptions(): array
     {
         return [
@@ -128,7 +156,21 @@ class ProductSalesChart extends ChartWidget
                         'text' => 'Штуки (шт)',
                     ],
                     'grid' => [
-                        'drawOnChartArea' => false, // Убираем сетку для правой оси, чтобы не рябило
+                        'drawOnChartArea' => false, 
+                    ],
+                ],
+                'y2' => [
+                    'type' => 'linear',
+                    'display' => true,
+                    'position' => 'right',
+                    'title' => [
+                        'display' => true,
+                        'text' => 'Процент (%)',
+                    ],
+                    'min' => 0, // Ограничиваем шкалу от 0
+                    'max' => 100, // До 100% для наглядности
+                    'grid' => [
+                        'drawOnChartArea' => false, // Чтобы линии сетки не превращали график в кашу
                     ],
                 ],
             ],
