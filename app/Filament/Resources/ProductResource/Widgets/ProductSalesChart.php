@@ -4,7 +4,7 @@ namespace App\Filament\Resources\ProductResource\Widgets;
 
 use App\Models\OrderRaw;
 use App\Models\SaleRaw;
-use App\Models\ProductAnalytic; // <-- Подключаем модель воронки
+use App\Models\ProductAnalytic; // <-- Модель воронки
 use Filament\Widgets\ChartWidget;
 use Illuminate\Database\Eloquent\Model;
 use Flowframe\Trend\Trend;
@@ -25,43 +25,56 @@ class ProductSalesChart extends ChartWidget
         $start = now()->subDays(30);
         $end = now();
 
-        // 1. Выручка (ФАКТИЧЕСКАЯ из SaleRaw - реальные деньги)
+        // 1. Выручка (Продажи в рублях - ФАКТ)
         $revenue = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
             ->dateColumn('sale_date')
             ->between($start, $end)
             ->perDay()
             ->sum('price_with_disc');
 
-        // 2. Сумма заказов (ФАКТИЧЕСКАЯ из OrderRaw - на какую сумму заказали)
+        // 2. Сумма заказов (Заказы в рублях - ФАКТ)
         $ordersSum = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
             ->dateColumn('order_date')
             ->between($start, $end)
             ->perDay()
             ->sum('total_price');
 
-        // 3. Кол-во выкупов (ИЗ ВОРОНКИ - сглаженные данные)
-        $salesCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
+        // 3. Кол-во выкупов (Штуки - ФАКТ)
+        $salesCount = Trend::query(SaleRaw::where('nm_id', $this->record->nm_id))
+            ->dateColumn('sale_date')
+            ->between($start, $end)
+            ->perDay()
+            ->count();
+
+        // 4. Кол-во заказов (Штуки - ФАКТ)
+        $ordersCount = Trend::query(OrderRaw::where('nm_id', $this->record->nm_id)->where('is_cancel', false))
+            ->dateColumn('order_date')
+            ->between($start, $end)
+            ->perDay()
+            ->count();
+
+        // --- ДАННЫЕ ИЗ ВОРОНКИ ТОЛЬКО ДЛЯ ПРОЦЕНТА ВЫКУПА ---
+        $funnelSalesCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
             ->dateColumn('date')
             ->between($start, $end)
             ->perDay()
-            ->sum('buyouts_count'); // В Trend используем sum(), так как берем значение из колонки
+            ->sum('buyouts_count');
 
-        // 4. Кол-во заказов (ИЗ ВОРОНКИ - сглаженные данные)
-        $ordersCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
+        $funnelOrdersCount = Trend::query(ProductAnalytic::where('nm_id', $this->record->nm_id))
             ->dateColumn('date')
             ->between($start, $end)
             ->perDay()
             ->sum('orders_count');
 
-        // 5. Высчитываем корректный % выкупа по воронке
+        // 5. Высчитываем % выкупа для каждого дня по ВОРОНКЕ
         $buyoutPercents = [];
-        foreach ($ordersCount as $key => $order) {
+        foreach ($funnelOrdersCount as $key => $order) {
             $orderAgg = $order->aggregate;
-            $saleAgg = $salesCount[$key]->aggregate ?? 0;
+            $saleAgg = $funnelSalesCount[$key]->aggregate ?? 0;
             
             $percent = $orderAgg > 0 ? round(($saleAgg / $orderAgg) * 100, 2) : 0;
             
-            // Срезаем аномалии WB, если они проскакивают в воронке
+            // Защита от аномалий свыше 100%
             if ($percent > 100) $percent = 100;
 
             $buyoutPercents[] = $percent;
@@ -71,7 +84,7 @@ class ProductSalesChart extends ChartWidget
             'datasets' => [
                 // --- ЛЕВАЯ ШКАЛА (ДЕНЬГИ - ФАКТ) ---
                 [
-                    'label' => 'Выручка факт (₽)',
+                    'label' => 'Выручка (₽)',
                     'data' => $revenue->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#10b981', // Зеленый
                     'backgroundColor' => 'rgba(16, 185, 129, 0.1)',
@@ -80,7 +93,7 @@ class ProductSalesChart extends ChartWidget
                     'order' => 3, 
                 ],
                 [
-                    'label' => 'Заказы факт (₽)',
+                    'label' => 'Сумма заказов (₽)',
                     'data' => $ordersSum->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#3b82f6', // Синий
                     'borderDash' => [5, 5], 
@@ -89,9 +102,9 @@ class ProductSalesChart extends ChartWidget
                     'order' => 4,
                 ],
 
-                // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ - ВОРОНКА) ---
+                // --- ПРАВАЯ ШКАЛА 1 (ШТУКИ - ФАКТ) ---
                 [
-                    'label' => 'Выкупы воронка (шт)',
+                    'label' => 'Выкупы (шт)',
                     'data' => $salesCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#f59e0b', // Оранжевый
                     'backgroundColor' => '#f59e0b',
@@ -101,7 +114,7 @@ class ProductSalesChart extends ChartWidget
                     'order' => 2,
                 ],
                 [
-                    'label' => 'Заказы воронка (шт)',
+                    'label' => 'Заказы (шт)',
                     'data' => $ordersCount->map(fn (TrendValue $value) => $value->aggregate),
                     'borderColor' => '#8b5cf6', // Фиолетовый
                     'borderWidth' => 2,
