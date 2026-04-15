@@ -230,6 +230,21 @@ class AdvertCampaignResource extends Resource
                     ])
                     ->default(9)
                     ->native(false),
+
+                // 👇 НОВЫЙ ФИЛЬТР "МОИ РК" 👇
+                Filter::make('my_campaigns')
+                    ->label('👤 Мои РК')
+                    ->query(function (Builder $query) {
+                        // 1. Получаем список nm_id товаров, привязанных к авторизованному менеджеру
+                        $myProductNmIds = \App\Models\Product::whereHas('users', function ($q) {
+                            $q->where('users.id', auth()->id());
+                        })->pluck('nm_id');
+
+                        // 2. Фильтруем кампании по этим nm_id
+                        return $query->whereIn('nm_id', $myProductNmIds);
+                    })
+                    ->toggle(),
+                // 👆 КОНЕЦ НОВОГО ФИЛЬТРА 👆
             ])
             ->actions([
                 Tables\Actions\ViewAction::make(),
