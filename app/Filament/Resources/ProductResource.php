@@ -168,6 +168,33 @@ class ProductResource extends Resource
                     ->limit(30)
                     ->toggleable(isToggledHiddenByDefault: true),
 
+                // 👇 НОВЫЕ КОЛОНКИ ABC И МАРЖИ 👇
+                Tables\Columns\TextColumn::make('abc_class')
+                    ->label('ABC')
+                    ->badge()
+                    ->sortable()
+                    ->color(fn (?string $state): string => match ($state) {
+                        'A' => 'success',
+                        'B' => 'warning',
+                        'C' => 'danger',
+                        default => 'gray',
+                    })
+                    ->tooltip('АВС-анализ по выручке за 30 дней'),
+
+                Tables\Columns\TextColumn::make('margin_30d')
+                    ->label('Маржа (30 дн)')
+                    ->suffix('%')
+                    ->sortable()
+                    ->badge()
+                    ->color(fn ($state) => $state >= 30 ? 'success' : ($state > 0 ? 'warning' : 'danger')),
+
+                Tables\Columns\TextColumn::make('revenue_30d')
+                    ->label('Выручка (30 дн)')
+                    ->money('RUB')
+                    ->sortable()
+                    ->toggleable(isToggledHiddenByDefault: true),
+                // 👆 КОНЕЦ НОВЫХ КОЛОНОК 👆
+
                 Tables\Columns\TextInputColumn::make('cost_price')
                     ->label('Себестоимость')
                     ->type('number')
@@ -179,10 +206,11 @@ class ProductResource extends Resource
                     ->sortable(query: function ($query, string $direction) {
                         return $query;
                     }),
-                    Tables\Columns\TextColumn::make('id')
-    ->label('Внутренний ID')
-    ->sortable()
-    ->searchable(),
+                    
+                Tables\Columns\TextColumn::make('id')
+                    ->label('Внутренний ID')
+                    ->sortable()
+                    ->searchable(),
             ])
             ->filters([
                 Tables\Filters\SelectFilter::make('brand')
