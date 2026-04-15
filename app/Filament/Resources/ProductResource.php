@@ -27,6 +27,7 @@ use Filament\Infolists\Components\TextEntry;
 use Filament\Infolists\Components\Grid as InfolistGrid;       
 use Filament\Infolists\Components\Section as InfolistSection;
 use Illuminate\Database\Eloquent\Builder;
+use App\Filament\Resources\ProductResource\Widgets\UnitEconomicsCalculator;
 
 class ProductResource extends Resource
 {
@@ -338,6 +339,14 @@ class ProductResource extends Resource
                             ->data(fn (Product $record) => ['record' => $record])
                             ->columnSpanFull(),
                     ]),
+                
+                // Встраиваем калькулятор
+                Infolists\Components\Section::make('Моделирование цены (Юнит-экономика)')
+                    ->schema([
+                        Infolists\Components\Livewire::make(UnitEconomicsCalculator::class)
+                            ->data(fn (Product $record) => ['record' => $record])
+                            ->columnSpanFull(),
+                    ]),
 
                 Infolists\Components\Section::make('Воронка продаж (30 дней)')
                     ->schema([
@@ -373,7 +382,8 @@ class ProductResource extends Resource
                             ->grid(2)
                             ->columnSpanFull(),
                     ])
-                    ->collapsible(),       
+                    ->collapsible(),  
+                     
             ]);
     }
 
