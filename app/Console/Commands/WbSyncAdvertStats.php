@@ -13,7 +13,7 @@ use Illuminate\Support\Facades\Http;
 class WbSyncAdvertStats extends Command
 {
     protected $signature = 'wb:sync-advert-stats {--days=3 : За сколько дней грузить}';
-    protected $description = 'Загрузка статистики по рекламе (только активные) через API v3';
+    protected $description = 'Загрузка статистики по рекламе (только активные) через API v3 (Быстрый Upsert)';
 
     public function handle()
     {
@@ -79,6 +79,7 @@ class WbSyncAdvertStats extends Command
                         if (empty($data)) {
                             $this->warn("   Пустой ответ от API.");
                         } else {
+                            $this->line("   💾 Сохранение статистики в БД...");
                             $this->saveStats($data, $campaignMap);
                             $this->info("   ✅ Данные сохранены.");
                         }
@@ -91,8 +92,8 @@ class WbSyncAdvertStats extends Command
                 // Лимит: 3 запроса в минуту (1 запрос в 20 секунд)
                 if ($chunkIndex < count($chunks) - 1 || $store->id !== $stores->last()->id) {
                     $this->warn("   ⏸ Ждем 21 секунду из-за лимитов WB (3 запроса/мин)...");
-                    $this->output->progressStart(21);
-                    for ($i = 0; $i < 21; $i++) {
+                    $this->output->progressStart(61);
+                    for ($i = 0; $i < 61; $i++) {
                         sleep(1);
                         $this->output->progressAdvance();
                     }
@@ -106,6 +107,7 @@ class WbSyncAdvertStats extends Command
     private function saveStats(array $data, $campaignMap)
     {
         $preparedData = [];
+        $now = now();
 
         foreach ($data as $campData) {
             $wbAdvertId = $campData['advertId'] ?? null;
@@ -116,13 +118,12 @@ class WbSyncAdvertStats extends Command
 
             foreach ($days as $dayStat) {
                 // Дата приходит в формате "2025-09-07T00:00:00Z"
-                $dateObj = Carbon::parse($dayStat['date'])->startOfDay();
-                $uniqueKey = $localCampaign->id . '_' . $dateObj->format('Y-m-d');
+                $dateObj = Carbon::parse($dayStat['date'])->startOfDay()->format('Y-m-d');
                 
                 $clicks = $dayStat['clicks'] ?? 0;
                 $cpc = $dayStat['cpc'] ?? 0;
                 
-                // 👇 ИЗМЕНЕНИЕ: В API v3 расходы лежат в поле 'sum'
+                // В API v3 расходы лежат в поле 'sum'
                 $apiSpend = $dayStat['sum'] ?? 0;
 
                 // Логика пересчета расхода (страховка от багов WB)
@@ -132,33 +133,41 @@ class WbSyncAdvertStats extends Command
                     $finalSpend = $apiSpend;
                 }
 
-                $preparedData[$uniqueKey] = [
+                // Собираем плоский массив для upsert
+                $preparedData[] = [
                     'advert_campaign_id' => $localCampaign->id,
                     'date'               => $dateObj,
                     'views'              => $dayStat['views'] ?? 0,
                     'clicks'             => $clicks,
                     'ctr'                => $dayStat['ctr'] ?? 0,
                     'cpc'                => $cpc,
-                    'spend'              => $finalSpend, // Сохраняем в нашу колонку spend
+                    'spend'              => $finalSpend,
                     'atbs'               => $dayStat['atbs'] ?? 0,
                     'orders'             => $dayStat['orders'] ?? 0,
                     'cr'                 => $dayStat['cr'] ?? 0,
                     'shks'               => $dayStat['shks'] ?? 0,
                     'sum_price'          => $dayStat['sum_price'] ?? 0,
+                    'created_at'         => $now,
+                    'updated_at'         => $now,
                 ];
             }
         }
 
-        DB::transaction(function () use ($preparedData) {
-            foreach ($preparedData as $row) {
-                AdvertStatistic::updateOrCreate(
-                    [
-                        'advert_campaign_id' => $row['advert_campaign_id'],
-                        'date'               => $row['date']
-                    ],
-                    $row
-                );
-            }
-        });
+        if (empty($preparedData)) {
+            return;
+        }
+
+        // Разбиваем на чанки по 1000 записей для безопасности лимитов Postgres
+        foreach (array_chunk($preparedData, 1000) as $chunk) {
+            AdvertStatistic::upsert(
+                $chunk,
+                ['advert_campaign_id', 'date'], // Уникальный составной ключ для проверки дублей
+                [
+                    // Поля, которые нужно обновить, если статистика за этот день уже есть
+                    'views', 'clicks', 'ctr', 'cpc', 'spend', 
+                    'atbs', 'orders', 'cr', 'shks', 'sum_price', 'updated_at'
+                ]
+            );
+        }
     }
 }
