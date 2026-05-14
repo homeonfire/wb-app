@@ -16,7 +16,7 @@ class WbSyncSales extends Command
                             {--days= : Принудительно загрузить за X дней} 
                             {--store= : ID магазина для точечной загрузки}';
                             
-    protected $description = 'Синхронизация продаж (Looping / salesFromDate)';
+    protected $description = 'Синхронизация продаж (Быстрый Upsert)';
 
     public function handle()
     {
@@ -41,6 +41,7 @@ class WbSyncSales extends Command
             $this->info("💰 Магазин: {$store->name} (ID: {$store->id})");
             
             if (empty($store->api_key_stat)) {
+                $this->warn("⚠️ Нет ключа API Статистики (api_key_stat). Пропускаем.");
                 continue;
             }
 
@@ -91,38 +92,57 @@ class WbSyncSales extends Command
                     }
 
                     $maxLastChangeDate = null;
+                    $upsertData = [];
+                    $now = now();
 
-                    foreach (array_chunk($sales, 500) as $chunk) {
-                        DB::transaction(function () use ($chunk, $store, &$maxLastChangeDate) {
-                            foreach ($chunk as $item) {
-                                SaleRaw::updateOrCreate(
-                                    ['sale_id' => $item->saleID],
-                                    [
-                                        'store_id' => $store->id,
-                                        'sale_date' => $item->date,
-                                        'last_change_date' => $item->lastChangeDate,
-                                        'nm_id' => $item->nmId,
-                                        'barcode' => $item->barcode,
-                                        'total_price' => $item->totalPrice,
-                                        'discount_percent' => $item->discountPercent,
-                                        'price_with_disc' => $item->priceWithDisc,
-                                        'for_pay' => $item->forPay,
-                                        'finished_price' => $item->finishedPrice,
-                                        'warehouse_name' => $item->warehouseName,
-                                        'region_name' => $item->regionName,
-                                    ]
-                                );
+                    // Формируем массив для массовой вставки
+                    foreach ($sales as $item) {
+                        // Обязательно проверяем наличие ID продажи (иногда WB отдает мусор)
+                        if (empty($item->saleID)) continue;
 
-                                $itemChangeDate = Carbon::parse($item->lastChangeDate);
-                                if (!$maxLastChangeDate || $itemChangeDate->gt($maxLastChangeDate)) {
-                                    $maxLastChangeDate = $itemChangeDate;
-                                }
-                            }
-                        });
+                        $upsertData[] = [
+                            'sale_id'          => $item->saleID,
+                            'store_id'         => $store->id,
+                            'sale_date'        => $item->date,
+                            'last_change_date' => $item->lastChangeDate,
+                            'nm_id'            => $item->nmId,
+                            'barcode'          => $item->barcode,
+                            'total_price'      => $item->totalPrice,
+                            'discount_percent' => $item->discountPercent,
+                            'price_with_disc'  => $item->priceWithDisc,
+                            'for_pay'          => $item->forPay,
+                            'finished_price'   => $item->finishedPrice,
+                            'warehouse_name'   => $item->warehouseName,
+                            'region_name'      => $item->regionName,
+                            'created_at'       => $now,
+                            'updated_at'       => $now,
+                        ];
+
+                        $itemChangeDate = Carbon::parse($item->lastChangeDate);
+                        if (!$maxLastChangeDate || $itemChangeDate->gt($maxLastChangeDate)) {
+                            $maxLastChangeDate = $itemChangeDate;
+                        }
+                    }
+
+                    // Отправляем чанками по 1000 записей (чтобы не упереться в лимит биндингов Postgres)
+                    if (!empty($upsertData)) {
+                        $this->log("💾 Отправка " . count($upsertData) . " записей в БД...");
+                        
+                        foreach (array_chunk($upsertData, 1000) as $chunk) {
+                            SaleRaw::upsert(
+                                $chunk,
+                                ['sale_id'], // Уникальное поле
+                                [
+                                    'store_id', 'sale_date', 'last_change_date', 'nm_id', 'barcode',
+                                    'total_price', 'discount_percent', 'price_with_disc', 'for_pay',
+                                    'finished_price', 'warehouse_name', 'region_name', 'updated_at'
+                                ] // Поля для обновления при дубле
+                            );
+                        }
                     }
 
                     $totalLoaded += $count;
-                    $this->log("💾 Сохранено. Итого: {$totalLoaded}");
+                    $this->log("✨ Сохранено. Итого: {$totalLoaded}");
 
                     // 3. СДВИГ ДАТЫ
                     if ($maxLastChangeDate) {
@@ -138,7 +158,8 @@ class WbSyncSales extends Command
                     }
 
                     $batchNum++;
-                    if ($count > 2000) sleep(2);
+                    // WB отдает максимум по 100 000 строк. Легкая защита от спама.
+                    if ($count > 2000) sleep(1);
                 }
 
             } catch (\Throwable $e) {

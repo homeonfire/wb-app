@@ -27,11 +27,12 @@ class WbSyncAnalytics extends Command
         $this->info("🚀 СТАРТ СКРИПТА (API v3). Период: {$dateFrom->format('Y-m-d')} - {$dateTo->format('Y-m-d')}");
 
         foreach ($stores as $store) {
-            $this->line("----------------------------------------------------------------");
-            $this->info("🏪 Магазин: {$store->name} (ID: {$store->id})");
+            $this->warn("\n==================================================");
+            $this->warn("🏪 Магазин: {$store->name} (ID: {$store->id})");
+            $this->warn("==================================================");
 
             if (empty($store->api_key_standard)) {
-                $this->warn("⚠️ Нет API ключа (Standard). Пропускаем.");
+                $this->error("⚠️ Нет API ключа (Standard). Пропускаем.");
                 continue;
             }
 
@@ -41,38 +42,27 @@ class WbSyncAnalytics extends Command
                 while ($currentDate <= $dateTo) {
                     $dateStr = $currentDate->format('Y-m-d');
                     
-                    // Для pastPeriod берем тот же день год назад (согласно докам WB)
-                    // Ограничиваем pastPeriod: WB не принимает даты старше 365 дней от СЕГОДНЯ
-                    $pastDate = $currentDate->copy()->subYear();
-                    $minDate = Carbon::now()->subDays(364);
+                    $this->info("\n📅 [{$dateStr}] Начинаем обработку дня");
 
-                    if ($pastDate->lt($minDate)) {
-                        $pastDate = clone $minDate;
-                    }
-                    $pastDateStr = $pastDate->format('Y-m-d');
-
-                    $this->line("");
-                    $this->info("📅 [{$dateStr}] Начинаем обработку дня");
-
-                    $limit = 100; // Рекомендуемый лимит для стабильной выгрузки
-                    $offset = 0;
+                    $page = 1; // В API v3 используется page вместо offset
                     $retryCount = 0;
                     $isDayDone = false;
 
                     while (!$isDayDone) {
                         try {
-                            $this->line("   👉 [Смещение {$offset}] Отправка запроса к API WB v3...");
+                            $this->line("   👉 [Страница {$page}] Отправка запроса к API WB v3...");
                             
+                            // Тело запроса по стандарту Swagger API v3
                             $payload = [
-                                'selectedPeriod' => ['start' => $dateStr, 'end' => $dateStr],
-                                'pastPeriod'     => ['start' => $pastDateStr, 'end' => $pastDateStr],
-                                'limit'          => $limit,
-                                'offset'         => $offset,
+                                'period' => [
+                                    'begin' => $dateStr . ' 00:00:00',
+                                    'end'   => $dateStr . ' 23:59:59'
+                                ],
+                                'page' => $page
                             ];
 
                             $startTime = microtime(true);
 
-                            // --- ПРЯМОЙ HTTP ЗАПРОС ---
                             $response = Http::withHeaders([
                                 'Authorization' => $store->api_key_standard,
                                 'Content-Type'  => 'application/json',
@@ -92,29 +82,28 @@ class WbSyncAnalytics extends Command
                                     break;
                                 }
                                 
-                                // WB скидывает лимиты примерно каждую минуту. Даем паузу 60 сек + 10 сек за каждую неудачу
                                 $sleepTime = 60 + ($retryCount * 10);
                                 $this->waitTimer($sleepTime, "Остываем после 429 ошибки");
-                                continue; // Повторяем запрос с тем же offset
+                                continue; 
                             }
 
-                            // Обработка других ошибок (400, 401, 500)
                             if (!$response->successful()) {
                                 $this->error("   🔴 ОШИБКА API HTTP: " . $response->status() . " " . $response->body());
                                 $isDayDone = true;
                                 break;
                             }
 
-                            $this->info("   ✅ Ответ получен за {$duration} сек.");
-                            $retryCount = 0; // Успех! Сбрасываем счетчик ошибок
+                            $this->line("   ✅ Ответ получен за {$duration} сек.");
+                            $retryCount = 0; 
 
                             $data = $response->json();
-                            $products = $data['data']['products'] ?? [];
+                            // В v3 данные обычно лежат в data.cards или data.products
+                            // В зависимости от точной реализации WB, проверяем оба варианта:
+                            $products = $data['data']['cards'] ?? $data['data']['products'] ?? [];
                             $count = count($products);
 
                             $this->line("   📦 В ответе карточек: {$count}");
 
-                            // Если вернулось меньше лимита, значит это последняя страница
                             if ($count === 0) {
                                 $this->info("   🏁 [{$dateStr}] Данные закончились.");
                                 $isDayDone = true;
@@ -123,32 +112,28 @@ class WbSyncAnalytics extends Command
 
                             $this->line("   💾 Сохраняем в БД...");
                             $this->saveAnalytics($store, $products, $dateStr);
-                            $this->info("   ✨ Сохранено.");
                             
-                            // Сдвигаем окно пагинации для следующего запроса
-                            $offset += $limit;
-
-                            // Если пришло меньше лимита, следующей страницы точно нет
-                            if ($count < $limit) {
+                            // Проверяем флаг следующей страницы (WB v3 часто отдает isNextPage)
+                            $isNextPage = $data['data']['isNextPage'] ?? true;
+                            
+                            if (!$isNextPage || $count < 100) {
                                 $this->info("   🏁 [{$dateStr}] Выгружена последняя часть дня.");
                                 $isDayDone = true;
                             } else {
-                                // Легкая пауза перед следующей страницей (чтобы не спамить)
-                                $this->waitTimer(2, "Пауза между страницами");
+                                $page++; // Переходим к следующей странице
+                                $this->waitTimer(21, "Пауза между страницами");
                             }
 
                         } catch (\Throwable $e) {
                             $this->error("   🚨 КРИТИЧЕСКАЯ ОШИБКА: " . $e->getMessage());
-                            // Если упало из-за таймаута соединения, тоже уходим в паузу
-                            $this->waitTimer(30, "Пауза после ошибки соединения");
+                            $this->waitTimer(21, "Пауза после ошибки соединения");
                         }
                     }
 
                     $currentDate->addDay();
                     
-                    // Пауза перед следующим днем
                     if ($currentDate <= $dateTo) {
-                        $this->waitTimer(3, "Короткая пауза перед следующей датой");
+                        $this->waitTimer(21, "Короткая пауза перед следующей датой");
                     }
                 }
 
@@ -157,58 +142,83 @@ class WbSyncAnalytics extends Command
             }
         }
         
-        $this->info("🏁 СКРИПТ ПОЛНОСТЬЮ ЗАВЕРШЕН.");
+        $this->info("\n🏁 СКРИПТ СИНХРОНИЗАЦИИ АНАЛИТИКИ ПОЛНОСТЬЮ ЗАВЕРШЕН.");
     }
 
     private function saveAnalytics(Store $store, array $products, string $date)
     {
-        DB::transaction(function () use ($store, $products, $date) {
-            foreach ($products as $row) {
-                // Разбираем новую структуру v3
-                $productInfo = $row['product'] ?? [];
-                $stat = $row['statistic']['selected'] ?? [];
-                $conversions = $stat['conversions'] ?? [];
-                $stocks = $productInfo['stocks'] ?? [];
+        $now = now();
+        $analyticsData = [];
 
-                // Если nmId нет, пропускаем
-                if (empty($productInfo['nmId'])) continue;
+        foreach ($products as $row) {
+            // Разбираем структуру (поддерживает как старые ключи, так и новые из v3)
+            $productInfo = $row['product'] ?? $row; // На случай если WB отдал плоский массив
+            $stat = $row['statistic']['selected'] ?? $row['statistics']['selected'] ?? [];
+            $conversions = $stat['conversions'] ?? [];
+            $stocks = $productInfo['stocks'] ?? [];
 
-                ProductAnalytic::updateOrCreate(
-                    [
-                        'store_id' => $store->id, 
-                        'nm_id'    => $productInfo['nmId'], 
-                        'date'     => $date
-                    ],
-                    [
-                        'vendor_code' => $productInfo['vendorCode'] ?? null,
-                        'brand_name'  => $productInfo['brandName'] ?? null,
-                        'object_id'   => $productInfo['subjectId'] ?? null,
-                        'object_name' => $productInfo['subjectName'] ?? null,
+            // Если nmId нет, пропускаем (ключ может быть nmId или nmID)
+            $nmId = $productInfo['nmId'] ?? $productInfo['nmID'] ?? null;
+            if (empty($nmId)) continue;
 
-                        'open_card_count'   => $stat['openCount'] ?? 0,
-                        'add_to_cart_count' => $stat['cartCount'] ?? 0,
-                        'orders_count'      => $stat['orderCount'] ?? 0,
-                        'buyouts_count'     => $stat['buyoutCount'] ?? 0,
-                        'cancel_count'      => $stat['cancelCount'] ?? 0,
+            $analyticsData[] = [
+                'store_id' => $store->id, 
+                'nm_id'    => $nmId, 
+                'date'     => $date,
+                
+                'vendor_code' => $productInfo['vendorCode'] ?? null,
+                'brand_name'  => $productInfo['brandName'] ?? null,
+                'object_id'   => $productInfo['subjectId'] ?? null,
+                'object_name' => $productInfo['subjectName'] ?? null,
 
-                        'orders_sum_rub'  => $stat['orderSum'] ?? 0,
-                        'buyouts_sum_rub' => $stat['buyoutSum'] ?? 0,
-                        'cancel_sum_rub'  => $stat['cancelSum'] ?? 0,
-                        'avg_price_rub'   => $stat['avgPrice'] ?? 0,
+                'open_card_count'   => $stat['openCount'] ?? 0,
+                'add_to_cart_count' => $stat['cartCount'] ?? 0,
+                'orders_count'      => $stat['orderCount'] ?? 0,
+                'buyouts_count'     => $stat['buyoutCount'] ?? 0,
+                'cancel_count'      => $stat['cancelCount'] ?? 0,
 
-                        'avg_orders_count_per_day' => $stat['avgOrdersCountPerDay'] ?? 0,
+                'orders_sum_rub'  => $stat['orderSum'] ?? 0,
+                'buyouts_sum_rub' => $stat['buyoutSum'] ?? 0,
+                'cancel_sum_rub'  => $stat['cancelSum'] ?? 0,
+                'avg_price_rub'   => $stat['avgPrice'] ?? 0,
 
-                        'conversion_open_to_cart_percent'  => $conversions['addToCartPercent'] ?? 0,
-                        'conversion_cart_to_order_percent' => $conversions['cartToOrderPercent'] ?? 0,
-                        'conversion_buyouts_percent'       => $conversions['buyoutPercent'] ?? 0,
+                'avg_orders_count_per_day' => $stat['avgOrdersCountPerDay'] ?? 0,
 
-                        // Остатки переехали прямо в $productInfo['stocks']
-                        'stocks_mp' => $stocks['mp'] ?? 0,
-                        'stocks_wb' => $stocks['wb'] ?? 0,
-                    ]
-                );
-            }
-        });
+                'conversion_open_to_cart_percent'  => $conversions['addToCartPercent'] ?? 0,
+                'conversion_cart_to_order_percent' => $conversions['cartToOrderPercent'] ?? 0,
+                'conversion_buyouts_percent'       => $conversions['buyoutPercent'] ?? 0,
+
+                'stocks_mp' => $stocks['mp'] ?? 0,
+                'stocks_wb' => $stocks['wb'] ?? 0,
+                
+                'created_at' => $now,
+                'updated_at' => $now,
+            ];
+        }
+
+        if (empty($analyticsData)) {
+            return;
+        }
+
+        $this->line("   -> Массовое сохранение " . count($analyticsData) . " метрик в БД...");
+
+        // Разбиваем на чанки по 500 записей, чтобы не превысить лимит биндингов в PostgreSQL
+        foreach (array_chunk($analyticsData, 500) as $chunk) {
+            ProductAnalytic::upsert(
+                $chunk,
+                ['store_id', 'nm_id', 'date'], // Составной уникальный ключ для проверки дублей
+                [
+                    // Поля, которые будут обновляться, если запись на эту дату уже есть
+                    'vendor_code', 'brand_name', 'object_id', 'object_name',
+                    'open_card_count', 'add_to_cart_count', 'orders_count', 'buyouts_count', 'cancel_count',
+                    'orders_sum_rub', 'buyouts_sum_rub', 'cancel_sum_rub', 'avg_price_rub', 'avg_orders_count_per_day',
+                    'conversion_open_to_cart_percent', 'conversion_cart_to_order_percent', 'conversion_buyouts_percent',
+                    'stocks_mp', 'stocks_wb', 'updated_at'
+                ]
+            );
+        }
+        
+        $this->info("   ✨ Успешно закоммичено!");
     }
 
     private function waitTimer(int $seconds, string $reason = "Ожидание")

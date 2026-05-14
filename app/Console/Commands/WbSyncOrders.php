@@ -20,11 +20,10 @@ class WbSyncOrders extends Command
 
     public function handle()
     {
-        // ... (начало то же самое) ...
         date_default_timezone_set('Europe/Moscow');
         $storeId = $this->option('store');
 
-        // Логика выбора магазинов (оставляем как было)
+        // Логика выбора магазинов
         if ($storeId) {
             $stores = Store::where('id', $storeId)->get();
             if ($stores->isEmpty()) {
@@ -46,7 +45,7 @@ class WbSyncOrders extends Command
             }
 
             try {
-                // 1. ОПРЕДЕЛЯЕМ СТАРТОВУЮ ДАТУ (оставляем как было)
+                // 1. ОПРЕДЕЛЯЕМ СТАРТОВУЮ ДАТУ
                 $lastOrder = OrderRaw::where('store_id', $store->id)
                     ->orderBy('last_change_date', 'desc')
                     ->first();
