@@ -67,4 +67,9 @@ class Product extends Model
     {
         return $this->hasMany(ExternalAdvert::class);
     }
+
+    public function warehouseStocks()
+    {
+        return $this->hasMany(WarehouseStock::class);
+    }
 }
