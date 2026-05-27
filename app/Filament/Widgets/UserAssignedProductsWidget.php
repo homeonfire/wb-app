@@ -2,106 +2,118 @@
 
 namespace App\Filament\Widgets;
 
+use Filament\Widgets\Widget;
 use App\Models\Product;
-use Filament\Tables;
-use Filament\Tables\Table;
-use Filament\Widgets\TableWidget as BaseWidget;
-use Illuminate\Database\Eloquent\Builder;
+use App\Models\OrderRaw;
+use App\Models\SaleRaw;
+use Filament\Facades\Filament;
+use Carbon\Carbon;
 
-class UserAssignedProductsWidget extends BaseWidget
+class UserAssignedProductsWidget extends Widget
 {
-    protected static ?string $heading = 'Выполнение плана по моим товарам';
+    // Указываем новый кастомный шаблон
+    protected static string $view = 'filament.widgets.store-plan-overview';
+    
+    // Растягиваем на всю ширину
     protected int | string | array $columnSpan = 'full';
+    
+    // Поднимаем виджет в самый верх Инфопанели
+    protected static ?int $sort = 1;
 
-    public function table(Table $table): Table
+    protected function getViewData(): array
     {
-        return $table
-            ->query(
-                // 1. Берем товары только текущего менеджера
-                Product::query()
-                    ->whereHas('users', fn (Builder $q) => $q->where('users.id', auth()->id()))
-                    // Жадная загрузка, чтобы не было N+1 запросов при расчетах
-                    ->with(['skus.warehouseStocks', 'plans' => function($q) {
-                        // Берем план на текущий месяц
-                        $q->whereMonth('created_at', now()->month)
-                          ->whereYear('created_at', now()->year);
-                    }])
-            )
-            ->columns([
-                // --- 1. Арт. ВБ, Наш, Предмет ---
-                Tables\Columns\TextColumn::make('nm_id')
-                    ->label('Товар')
-                    ->formatStateUsing(fn (Product $record) => "<b>{$record->title}</b><br><span class='text-xs text-gray-500'>WB: {$record->nm_id} | Арт: {$record->vendor_code}</span>")
-                    ->html() // Разрешаем HTML, чтобы скомпоновать три поля в одну красивую ячейку
-                    ->searchable(['nm_id', 'vendor_code', 'title'])
-                    ->copyable(),
+        $storeId = Filament::getTenant()->id;
+        $start = now()->startOfMonth();
+        $end = now()->endOfMonth();
 
-                // --- 2. Цены (Текущая / СПП) ---
-                Tables\Columns\TextColumn::make('prices')
-                    ->label('Цена / с СПП')
-                    ->getStateUsing(function (Product $record) {
-                        // Берем цену первого размера (SKU)
-                        $price = $record->skus->first()->price ?? 0; 
-                        $priceSpp = $price * 0.75; // <-- ЗАМЕНИ на реальную логику или поле с СПП
-                        
-                        return number_format($price, 0, '.', ' ') . ' ₽ / ' . number_format($priceSpp, 0, '.', ' ') . ' ₽';
-                    })
-                    ->color('gray'),
+        // 1. Получаем ТОЛЬКО ТЕ ТОВАРЫ, у которых ЕСТЬ ПЛАН на этот месяц
+        $products = Product::where('store_id', $storeId)
+            ->whereHas('plans', function($q) use ($start) {
+                $q->where('year', $start->year)->where('month', $start->month);
+            })
+            ->with(['plans' => function($q) use ($start) {
+                $q->where('year', $start->year)->where('month', $start->month);
+            }])
+            ->get()
+            ->keyBy('nm_id');
 
-                // --- 3. % Выкупа ---
-                Tables\Columns\TextColumn::make('buyout_percent')
-                    ->label('% Выкупа')
-                    // Если процент не хранится в Product, здесь будет твоя логика его получения
-                    ->getStateUsing(fn (Product $record) => $record->buyout_percent ?? rand(35, 85)) 
-                    ->suffix('%')
-                    ->badge()
-                    ->color(fn ($state) => $state >= 60 ? 'success' : ($state >= 40 ? 'warning' : 'danger')),
+        $nmIds = $products->keys()->toArray();
 
-                // --- 4. Остатки ---
-                Tables\Columns\TextColumn::make('fbo_stock')
-                    ->label('Остатки')
-                    ->getStateUsing(fn (Product $record) => $record->skus->flatMap->warehouseStocks->sum('quantity'))
-                    ->badge()
-                    ->color(fn ($state) => $state > 50 ? 'success' : ($state > 0 ? 'warning' : 'danger')),
+        // Если планов ни у кого нет, отдаем пустые данные, чтобы не было ошибки БД
+        if (empty($nmIds)) {
+            return $this->getEmptyData($start);
+        }
 
-                // --- 5. Заказы (Факт/План) + Прогресс-бар ---
-                Tables\Columns\ViewColumn::make('orders_plan_fact')
-                    ->label('Заказы за месяц')
-                    ->view('filament.tables.columns.plan-fact')
-                    ->getStateUsing(function (Product $record) {
-                        $plan = $record->plans->first()->orders_plan ?? 0;
-                        $fact = $record->orders_count_30d ?? 0; // <-- Укажи свое поле факта
-                        $percent = $plan > 0 ? round(($fact / $plan) * 100) : ($fact > 0 ? 100 : 0);
-                        
-                        return ['fact' => $fact, 'plan' => $plan, 'percent' => $percent, 'unit' => 'шт.'];
-                    }),
+        // 2. Считаем ОБЩИЕ ПЛАНЫ
+        $ordersPlan = 0;
+        $salesPlan = 0;
+        $marginPlan = 0;
 
-                // --- 6. Продажи (Факт/План) + Прогресс-бар ---
-                Tables\Columns\ViewColumn::make('sales_plan_fact')
-                    ->label('Продажи за месяц')
-                    ->view('filament.tables.columns.plan-fact')
-                    ->getStateUsing(function (Product $record) {
-                        $plan = $record->plans->first()->sales_plan ?? 0;
-                        $fact = $record->sales_count_30d ?? 0; // <-- Укажи свое поле факта
-                        $percent = $plan > 0 ? round(($fact / $plan) * 100) : ($fact > 0 ? 100 : 0);
-                        
-                        return ['fact' => $fact, 'plan' => $plan, 'percent' => $percent, 'unit' => 'шт.'];
-                    }),
+        foreach ($products as $product) {
+            $plan = $product->plans->first();
+            if ($plan) {
+                $ordersPlan += $plan->orders_plan ?? 0;
+                $salesPlan += $plan->sales_plan ?? 0;
+                $marginPlan += $plan->margin_plan ?? 0;
+            }
+        }
 
-                // --- 7. Маржа (Факт/План) + Прогресс-бар ---
-                Tables\Columns\ViewColumn::make('margin_plan_fact')
-                    ->label('Маржа за месяц')
-                    ->view('filament.tables.columns.plan-fact')
-                    ->getStateUsing(function (Product $record) {
-                        $plan = $record->plans->first()->margin_plan ?? 0;
-                        $fact = $record->margin_30d ?? 0; // <-- Укажи свое поле факта
-                        $percent = $plan > 0 ? round(($fact / $plan) * 100) : ($fact > 0 ? 100 : 0);
-                        
-                        // Передаем 'unit' => '₽', чтобы в прогресс-баре были рубли
-                        return ['fact' => $fact, 'plan' => $plan, 'percent' => $percent, 'unit' => '₽'];
-                    }),
-            ])
-            ->paginated(false) 
-            ->striped(); // Добавит легкую зебру для читаемости
+        // 3. Считаем ОБЩИЙ ФАКТ (ТОЛЬКО по товарам с планом)
+        // Заказы
+        $ordersFact = OrderRaw::whereIn('nm_id', $nmIds)
+            ->whereBetween('order_date', [$start, $end])
+            ->count();
+        
+        // Выкупы и выручка (группируем одним запросом для скорости)
+        $salesAgg = SaleRaw::whereIn('nm_id', $nmIds)
+            ->whereBetween('sale_date', [$start, $end])
+            ->selectRaw('nm_id, SUM(price_with_disc) as rev, COUNT(*) as cnt')
+            ->groupBy('nm_id')
+            ->get();
+            
+        $salesFact = $salesAgg->sum('cnt');
+        
+
+        return [
+    'monthName' => $start->translatedFormat('F Y'),
+    'overall_percent' => $salesPlan > 0 ? round(($salesFact / $salesPlan) * 100) : ($salesFact > 0 ? 100 : 0),
+    'metrics' => [
+        [
+            'label' => 'Заказы',
+            'fact' => $ordersFact,
+            'plan' => $ordersPlan,
+            'unit' => 'шт.',
+            'percent' => $ordersPlan > 0 ? round(($ordersFact / $ordersPlan) * 100) : ($ordersFact > 0 ? 100 : 0),
+        ],
+        [
+            'label' => 'Выкупы',
+            'fact' => $salesFact,
+            'plan' => $salesPlan,
+            'unit' => 'шт.',
+            'percent' => $salesPlan > 0 ? round(($salesFact / $salesPlan) * 100) : ($salesFact > 0 ? 100 : 0),
+        ],
+        [
+            'label' => 'Выручка', // Заменили маржу на выручку
+            'fact' => $salesAgg->sum('rev'), 
+            'plan' => $products->sum(fn($p) => $p->plans->first()->sales_plan ?? 0), // Либо твое поле плана выручки
+            'unit' => '₽',
+            'percent' => $salesPlan > 0 ? round(($salesAgg->sum('rev') / $salesPlan) * 100) : 0, 
+        ],
+    ]
+];
+    }
+
+    // Вспомогательный метод для пустых планов (в начале месяца)
+    private function getEmptyData(Carbon $start): array
+    {
+        return [
+            'monthName' => $start->translatedFormat('F Y'),
+            'overall_percent' => 0,
+            'metrics' => [
+                ['label' => 'Общие заказы', 'fact' => 0, 'plan' => 0, 'unit' => 'шт.', 'percent' => 0],
+                ['label' => 'Общие выкупы', 'fact' => 0, 'plan' => 0, 'unit' => 'шт.', 'percent' => 0],
+                ['label' => 'Общая маржа', 'fact' => 0, 'plan' => 0, 'unit' => '₽', 'percent' => 0],
+            ]
+        ];
     }
 }
