@@ -29,6 +29,15 @@ class AdvertCampaignResource extends Resource
 
     protected static ?string $tenantOwnershipRelationshipName = 'store';
 
+    protected static function periodMetric(AdvertCampaign $record, string $filteredKey, string $totalKey): float|int|null
+    {
+        if (array_key_exists($filteredKey, $record->getAttributes())) {
+            return $record->{$filteredKey} ?? 0;
+        }
+
+        return $record->{$totalKey};
+    }
+
     public static function form(Form $form): Form
     {
         return $form
@@ -93,7 +102,7 @@ class AdvertCampaignResource extends Resource
 
                 TextColumn::make('views')
                     ->label('Показы')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_views ?? $record->statistics_sum_views)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_views', 'statistics_sum_views'))
                     ->numeric()
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_views', $direction))
                     ->placeholder('-')
@@ -101,7 +110,7 @@ class AdvertCampaignResource extends Resource
 
                 TextColumn::make('clicks')
                     ->label('Клики')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_clicks ?? $record->statistics_sum_clicks)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_clicks', 'statistics_sum_clicks'))
                     ->numeric()
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_clicks', $direction))
                     ->placeholder('-'),
@@ -109,14 +118,14 @@ class AdvertCampaignResource extends Resource
                 TextColumn::make('ctr')
                     ->label('CTR')
                     ->state(function (AdvertCampaign $record) {
-                        $clicks = $record->filtered_clicks ?? $record->statistics_sum_clicks ?? 0;
-                        $views = $record->filtered_views ?? $record->statistics_sum_views ?? 0;
+                        $clicks = static::periodMetric($record, 'filtered_clicks', 'statistics_sum_clicks') ?? 0;
+                        $views = static::periodMetric($record, 'filtered_views', 'statistics_sum_views') ?? 0;
                         return $views > 0 ? round(($clicks / $views) * 100, 2) . '%' : '-';
                     }),
 
                 TextColumn::make('atbs')
                     ->label('В корзину')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_atbs ?? $record->statistics_sum_atbs)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_atbs', 'statistics_sum_atbs'))
                     ->numeric()
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_atbs', $direction))
                     ->placeholder('-')
@@ -124,23 +133,21 @@ class AdvertCampaignResource extends Resource
 
                 TextColumn::make('orders')
                     ->label('Заказы')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_orders ?? $record->statistics_sum_orders)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_orders', 'statistics_sum_orders'))
                     ->numeric()
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_orders', $direction))
                     ->color('success')
                     ->weight('bold')
                     ->placeholder('-'),
 
-                // 👇 НОВЫЙ СТОЛБЕЦ: CPO (Cost Per Order)
                 TextColumn::make('cpo')
                     ->label('CPO')
                     ->state(function (AdvertCampaign $record) {
-                        $spend = $record->filtered_spend ?? $record->statistics_sum_spend ?? 0;
-                        $orders = $record->filtered_orders ?? $record->statistics_sum_orders ?? 0;
-                        
+                        $spend = static::periodMetric($record, 'filtered_spend', 'statistics_sum_spend') ?? 0;
+                        $orders = static::periodMetric($record, 'filtered_orders', 'statistics_sum_orders') ?? 0;
+
                         if ($orders <= 0) return '-';
-                        
-                        // Расход / Заказы
+
                         return $spend / $orders;
                     })
                     ->money('RUB')
@@ -148,7 +155,7 @@ class AdvertCampaignResource extends Resource
 
                 TextColumn::make('sum_price')
                     ->label('Заказы (руб)')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_sum_price ?? $record->statistics_sum_sum_price)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_sum_price', 'statistics_sum_sum_price'))
                     ->money('RUB')
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_sum_price', $direction))
                     ->color('success')
@@ -156,7 +163,7 @@ class AdvertCampaignResource extends Resource
 
                 TextColumn::make('spend')
                     ->label('Расход')
-                    ->state(fn (AdvertCampaign $record) => $record->filtered_spend ?? $record->statistics_sum_spend)
+                    ->state(fn (AdvertCampaign $record) => static::periodMetric($record, 'filtered_spend', 'statistics_sum_spend'))
                     ->money('RUB')
                     ->sortable(query: fn (Builder $query, string $direction) => $query->orderBy('statistics_sum_spend', $direction))
                     ->color('danger')
@@ -165,9 +172,9 @@ class AdvertCampaignResource extends Resource
                 TextColumn::make('drr')
                     ->label('ДРР')
                     ->state(function (AdvertCampaign $record) {
-                        $spend = $record->filtered_spend ?? $record->statistics_sum_spend ?? 0;
-                        $revenue = $record->filtered_sum_price ?? $record->statistics_sum_sum_price ?? 0;
-                        
+                        $spend = static::periodMetric($record, 'filtered_spend', 'statistics_sum_spend') ?? 0;
+                        $revenue = static::periodMetric($record, 'filtered_sum_price', 'statistics_sum_sum_price') ?? 0;
+
                         if ($revenue <= 0) return '-';
                         return round(($spend / $revenue) * 100, 1) . '%';
                     })
@@ -183,24 +190,27 @@ class AdvertCampaignResource extends Resource
                     ->form([
                         Forms\Components\DatePicker::make('from')
                             ->label('С даты')
-                            ->default(now()->subDays(7)),
+                            ->native(false),
                         Forms\Components\DatePicker::make('until')
                             ->label('По дату')
-                            ->default(now()),
+                            ->native(false),
                     ])
-                    ->query(function (Builder $query, array $data) {
-                        $from = $data['from'] ?? null;
-                        $until = $data['until'] ?? null;
+                    ->default([
+                        'from' => now()->subDays(7)->toDateString(),
+                        'until' => now()->toDateString(),
+                    ])
+                    ->baseQuery(function (Builder $query, array $data) {
+                        $from = filled($data['from'] ?? null) ? Carbon::parse($data['from'])->toDateString() : null;
+                        $until = filled($data['until'] ?? null) ? Carbon::parse($data['until'])->toDateString() : null;
 
                         if (!$from && !$until) {
                             return $query;
                         }
 
-                        $dateFilter = fn($q) => $q
-                            ->when($from, fn($subQ) => $subQ->where('date', '>=', $from))
-                            ->when($until, fn($subQ) => $subQ->where('date', '<=', $until));
+                        $dateFilter = fn ($q) => $q
+                            ->when($from, fn ($subQ) => $subQ->where('date', '>=', $from))
+                            ->when($until, fn ($subQ) => $subQ->where('date', '<=', $until));
 
-                        // 2. ФИЛЬТРОВАННЫЙ ЗАПРОС (Алиасы filtered_...)
                         return $query
                             ->withAggregate(['statistics as filtered_views' => $dateFilter], 'views', 'sum')
                             ->withAggregate(['statistics as filtered_clicks' => $dateFilter], 'clicks', 'sum')
