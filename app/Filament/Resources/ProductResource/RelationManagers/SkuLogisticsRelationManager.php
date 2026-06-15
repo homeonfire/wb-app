@@ -17,17 +17,14 @@ class SkuLogisticsRelationManager extends RelationManager
     protected static ?string $title = 'Остатки и логистика по размерам (SKU)';
     protected static ?string $icon = 'heroicon-o-table-cells';
 
-    public function isReadOnly(): bool
-    {
-        return true; // Вся таблица только для чтения
-    }
+    // ⚠️ Метод isReadOnly() удален, чтобы Filament разрешил отображение кнопки "Склады"
 
     public function table(Table $table): Table
     {
         return $table
             ->recordTitleAttribute('tech_size')
             ->paginated(false) // Показываем все размеры сразу без страниц
-            ->striped() // Полосатые строки как на скрине
+            ->striped() // Полосатые строки
             ->columns([
                 // 1. РАЗМЕР / БАРКОД
                 Tables\Columns\TextColumn::make('tech_size')
@@ -39,7 +36,6 @@ class SkuLogisticsRelationManager extends RelationManager
                 Tables\Columns\TextColumn::make('sales_per_day')
                     ->label('Продаж/день')
                     ->getStateUsing(function (Sku $record) {
-                        // Считаем продажи за 30 дней
                         $sales30 = $record->sales()
                             ->where('sale_date', '>=', now()->subDays(30))
                             ->count();
@@ -60,17 +56,15 @@ class SkuLogisticsRelationManager extends RelationManager
                     ->label('К клиенту')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('in_way_to_client'))
                     ->alignCenter()
-                    ->color('info'), // Синий цвет
+                    ->color('info'),
 
                 // 5. ОТ КЛИЕНТА
                 Tables\Columns\TextColumn::make('from_client')
                     ->label('От клиента')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('in_way_from_client'))
                     ->alignCenter()
-                    ->color('warning'), // Оранжевый
+                    ->color('warning'),
 
-                // --- ВНУТРЕННЯЯ ЛОГИСТИКА (из таблицы sku_stocks) ---
-                
                 // 6. СВОЙ СКЛАД
                 Tables\Columns\TextColumn::make('stock.stock_own')
                     ->label('Свой склад')
@@ -96,43 +90,40 @@ class SkuLogisticsRelationManager extends RelationManager
                     ->alignCenter(),
 
                 // 10. ОБОРАЧИВАЕМОСТЬ (Дней)
-                // Формула: Остаток / Скорость продаж
                 Tables\Columns\TextColumn::make('turnover')
                     ->label('Оборачиваемость')
                     ->getStateUsing(function (Sku $record) {
-                        // 1. Считаем общий остаток (WB + Свой)
                         $wbStock = $record->warehouseStocks->sum('quantity');
                         $ownStock = $record->stock->stock_own ?? 0;
                         $totalStock = $wbStock + $ownStock;
 
-                        // 2. Считаем скорость
                         $sales30 = $record->sales()
                             ->where('sale_date', '>=', now()->subDays(30))
                             ->count();
                         $speed = $sales30 / 30;
 
-                        if ($speed <= 0) return '∞'; // Если продаж нет
+                        if ($speed <= 0) return '∞';
 
                         $days = $totalStock / $speed;
                         return round($days);
                     })
                     ->color(fn ($state) => match(true) {
                          $state === '∞' => 'gray',
-                         $state < 60 => 'success',   // Зеленый (хорошая оборачиваемость)
-                         $state < 100 => 'warning', // Желтый
-                         default => 'danger',       // Красный (залежи)
+                         $state < 60 => 'success',
+                         $state < 100 => 'warning',
+                         default => 'danger',
                     })
                     ->alignEnd()
                     ->weight('bold'),
             ])
             ->actions([
-                // 👇 Кнопка "Склады" для открытия кастомного модального окна
+                // 👇 Кнопка "Склады" теперь отобразится корректно
                 Tables\Actions\Action::make('warehouses')
                     ->label('Склады')
                     ->icon('heroicon-o-building-storefront')
                     ->modalHeading(fn ($record) => "Остатки по складам: {$record->tech_size} ({$record->barcode})")
                     ->modalWidth('4xl')
-                    ->modalSubmitAction(false) // Убираем кнопку сохранения, так как это чистый просмотр
+                    ->modalSubmitAction(false)
                     ->modalCancelAction(fn ($action) => $action->label('Закрыть'))
                     ->modalContent(fn ($record) => view('filament.resources.product-resource.sku-warehouses-modal', ['sku' => $record])),
             ]);
