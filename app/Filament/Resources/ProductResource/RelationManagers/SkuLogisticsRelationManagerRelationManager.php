@@ -42,7 +42,7 @@ class SkuLogisticsRelationManager extends RelationManager
                         // Считаем продажи за 30 дней
                         $sales30 = $record->sales()
                             ->where('sale_date', '>=', now()->subDays(30))
-                            ->count();
+                            ->count(); // Или sum('quantity'), если есть кол-во в строке
                         
                         return $sales30 > 0 ? number_format($sales30 / 30, 2) : '0.00';
                     })
@@ -124,17 +124,6 @@ class SkuLogisticsRelationManager extends RelationManager
                     })
                     ->alignEnd()
                     ->weight('bold'),
-            ])
-            ->actions([
-                // 👇 Кнопка "Склады" для открытия кастомного модального окна
-                Tables\Actions\Action::make('warehouses')
-                    ->label('Склады')
-                    ->icon('heroicon-o-building-storefront')
-                    ->modalHeading(fn ($record) => "Остатки по складам: {$record->tech_size} ({$record->barcode})")
-                    ->modalWidth('4xl')
-                    ->modalSubmitAction(false) // Убираем кнопку сохранения, так как это чистый просмотр
-                    ->modalCancelAction(fn ($action) => $action->label('Закрыть'))
-                    ->modalContent(fn ($record) => view('filament.resources.product-resource.sku-warehouses-modal', ['sku' => $record])),
             ]);
     }
 }
