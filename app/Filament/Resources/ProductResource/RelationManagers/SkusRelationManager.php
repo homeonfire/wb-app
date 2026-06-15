@@ -47,22 +47,7 @@ class SkusRelationManager extends RelationManager
                     ->modalHeading(fn ($record) => "Остатки по складам: {$record->tech_size} ({$record->barcode})")
                     ->modalSubmitAction(false) // Только просмотр, убираем кнопку Submit
                     ->modalCancelActionLabel('Закрыть')
-                    ->infolist([
-                        Infolists\Components\RepeatableEntry::make('warehouseStocks')
-                            ->label('') // Скрываем верхний лейбл, чтобы было чище
-                            ->schema([
-                                // ВНИМАНИЕ: Убедитесь, что поле с названием склада в БД называется 'warehouse_name'
-                                Infolists\Components\TextEntry::make('warehouse_name') 
-                                    ->label('Склад'),
-                                
-                                Infolists\Components\TextEntry::make('quantity')
-                                    ->label('Остаток, шт.')
-                                    ->badge()
-                                    ->color('primary'),
-                            ])
-                            ->columns(2)
-                            ->emptyStateHeading('Нет данных по складам для этого размера'),
-                    ]),
+                    ->modalContent(fn ($record) => view('filament.resources.product-resource.sku-warehouses-modal', ['sku' => $record])),
 
                 // Стандартные кнопки
                 Tables\Actions\EditAction::make(),
