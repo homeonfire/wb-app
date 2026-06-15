@@ -123,14 +123,13 @@ class SkuLogisticsRelationManager extends RelationManager
                     ->weight('bold'),
             ])
             ->actions([
-                // 👇 Полностью скопированная и адаптированная логика из Аналитики по товарам
                 Tables\Actions\Action::make('view_warehouses')
                     ->label('Склады')
                     ->icon('heroicon-m-building-office-2')
                     ->color('info')
                     ->modalHeading(fn ($record) => "Разбивка по складам: " . ($record->product->title ?? 'Товар'))
                     ->modalDescription(fn ($record) => "Размер: " . ($record->tech_size ?? '-') . " | Баркод: " . ($record->barcode ?? '-'))
-                    ->modalSubmitAction(false) // Окно только для просмотра
+                    ->modalSubmitAction(false) 
                     ->modalCancelActionLabel('Закрыть')
                     ->modalContent(fn ($record) => new HtmlString(
                         Blade::render('
@@ -144,8 +143,11 @@ class SkuLogisticsRelationManager extends RelationManager
                                     </thead>
                                     <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                                         @php
+                                            // 👇 ИСПРАВЛЕННЫЙ ЗАПРОС: Группируем по складу и суммируем остатки
                                             $details = \App\Models\SkuWarehouseDetail::where("sku_id", $skuId)
-                                                ->orderBy("quantity", "desc")
+                                                ->selectRaw("warehouse_name, SUM(quantity) as quantity")
+                                                ->groupBy("warehouse_name")
+                                                ->orderByDesc("quantity")
                                                 ->get();
                                         @endphp
                                         
@@ -162,7 +164,7 @@ class SkuLogisticsRelationManager extends RelationManager
                                     </tbody>
                                 </table>
                             </div>
-                        ', ['skuId' => $record->id]) // Передаем ID текущего SKU
+                        ', ['skuId' => $record->id])
                     ))
             ]);
     }
