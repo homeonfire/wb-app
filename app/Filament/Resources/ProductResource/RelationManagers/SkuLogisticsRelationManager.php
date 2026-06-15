@@ -129,12 +129,18 @@ class SkuLogisticsRelationManager extends RelationManager
                                     </thead>
                                     <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                                         @php
-                                            // 👇 ГРУППИРОВКА КОЛЛЕКЦИИ: Суммируем все строки с одинаковым складом
+                                            // Группируем по ID склада, чтобы пустые имена не слипались в одну строку
                                             $grouped = $sku->warehouseStocks
                                                 ->groupBy(function($item) {
-                                                    return empty($item->warehouse_name) ? "Склад не указан" : $item->warehouse_name;
+                                                    return $item->warehouse_id ?? ($item->warehouse_name ?: "unknown");
                                                 })
-                                                ->map(function ($group, $name) {
+                                                ->map(function ($group) {
+                                                    $first = $group->first();
+                                                    // Если имя пустое, выводим ID склада
+                                                    $name = !empty($first->warehouse_name) 
+                                                        ? $first->warehouse_name 
+                                                        : "Склад WB (ID: " . ($first->warehouse_id ?? "Неизвестно") . ")";
+                                                    
                                                     return (object) [
                                                         "name" => $name,
                                                         "qty" => $group->sum("quantity"),
