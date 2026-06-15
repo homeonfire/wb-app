@@ -23,14 +23,16 @@ class SkuLogisticsRelationManager extends RelationManager
     {
         return $table
             ->recordTitleAttribute('tech_size')
-            ->paginated(false) 
-            ->striped() 
+            ->paginated(false) // Показываем все размеры сразу без страниц
+            ->striped() // Полосатые строки
             ->columns([
+                // 1. РАЗМЕР / БАРКОД
                 Tables\Columns\TextColumn::make('tech_size')
                     ->label('Размер / Баркод')
                     ->description(fn (Sku $record) => $record->barcode)
                     ->weight('bold'),
 
+                // 2. ПРОДАЖ/ДЕНЬ (Среднее за 30 дней)
                 Tables\Columns\TextColumn::make('sales_per_day')
                     ->label('Продаж/день')
                     ->getStateUsing(function (Sku $record) {
@@ -42,45 +44,52 @@ class SkuLogisticsRelationManager extends RelationManager
                     })
                     ->alignCenter(),
 
-                // 👇 Эта колонка берет сумму из warehouseStocks
+                // 3. ОСТАТОК WB (FBO)
                 Tables\Columns\TextColumn::make('wb_stock')
                     ->label('Остаток WB')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('quantity'))
                     ->alignCenter()
                     ->color('gray'),
 
+                // 4. К КЛИЕНТУ
                 Tables\Columns\TextColumn::make('to_client')
                     ->label('К клиенту')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('in_way_to_client'))
                     ->alignCenter()
                     ->color('info'),
 
+                // 5. ОТ КЛИЕНТА
                 Tables\Columns\TextColumn::make('from_client')
                     ->label('От клиента')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('in_way_from_client'))
                     ->alignCenter()
                     ->color('warning'),
 
+                // 6. СВОЙ СКЛАД
                 Tables\Columns\TextColumn::make('stock.stock_own')
                     ->label('Свой склад')
                     ->default(0)
                     ->alignCenter(),
 
+                // 7. В ПУТИ НА WB
                 Tables\Columns\TextColumn::make('stock.in_transit_to_wb')
                     ->label('В пути на WB')
                     ->default(0)
                     ->alignCenter(),
 
+                // 8. В ПУТИ (КАРГО)
                 Tables\Columns\TextColumn::make('stock.in_transit_general')
                     ->label('В пути (Склад)')
                     ->default(0)
                     ->alignCenter(),
 
+                // 9. НА ФАБРИКЕ
                 Tables\Columns\TextColumn::make('stock.at_factory')
                     ->label('На фабрике')
                     ->default(0)
                     ->alignCenter(),
 
+                // 10. ОБОРАЧИВАЕМОСТЬ (Дней)
                 Tables\Columns\TextColumn::make('turnover')
                     ->label('Оборачиваемость')
                     ->getStateUsing(function (Sku $record) {
@@ -108,6 +117,7 @@ class SkuLogisticsRelationManager extends RelationManager
                     ->weight('bold'),
             ])
             ->actions([
+                // 👇 СТРОГОЕ КОПИРОВАНИЕ АНАЛОГИИ С АНАЛИТИКИ ПО ТОВАРАМ
                 Tables\Actions\Action::make('view_warehouses')
                     ->label('Склады')
                     ->icon('heroicon-m-building-office-2')
@@ -123,48 +133,30 @@ class SkuLogisticsRelationManager extends RelationManager
                                     <thead>
                                         <tr class="border-b border-gray-200 dark:border-gray-700 text-gray-500">
                                             <th class="py-3 font-semibold text-left">Название склада</th>
-                                            <th class="py-3 font-semibold text-center w-32">На WB (FBO)</th>
-                                            <th class="py-3 font-semibold text-center w-32">К клиенту</th>
+                                            <th class="py-3 font-semibold text-center w-32">Количество</th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                                         @php
-                                            // Группируем по ID склада, чтобы пустые имена не слипались в одну строку
-                                            $grouped = $sku->warehouseStocks
-                                                ->groupBy(function($item) {
-                                                    return $item->warehouse_id ?? ($item->warehouse_name ?: "unknown");
-                                                })
-                                                ->map(function ($group) {
-                                                    $first = $group->first();
-                                                    // Если имя пустое, выводим ID склада
-                                                    $name = !empty($first->warehouse_name) 
-                                                        ? $first->warehouse_name 
-                                                        : "Склад WB (ID: " . ($first->warehouse_id ?? "Неизвестно") . ")";
-                                                    
-                                                    return (object) [
-                                                        "name" => $name,
-                                                        "qty" => $group->sum("quantity"),
-                                                        "in_way" => $group->sum("in_way_to_client")
-                                                    ];
-                                                })
-                                                ->sortByDesc("qty");
+                                            $details = \App\Models\SkuWarehouseDetail::where("sku_id", $skuId)
+                                                ->orderBy("quantity", "desc")
+                                                ->get();
                                         @endphp
                                         
-                                        @forelse($grouped as $detail)
-                                            <tr class="hover:bg-gray-50/50">
-                                                <td class="py-3 text-left font-medium text-gray-900 dark:text-white">{{ $detail->name }}</td>
-                                                <td class="py-3 text-center font-bold text-primary-600 dark:text-primary-400">{{ $detail->qty }} шт.</td>
-                                                <td class="py-3 text-center font-semibold text-blue-600 dark:text-blue-400">{{ $detail->in_way }} шт.</td>
+                                        @forelse($details as $detail)
+                                            <tr>
+                                                <td class="py-3 text-left font-medium">{{ $detail->warehouse_name }}</td>
+                                                <td class="py-3 text-center font-bold text-primary-600">{{ $detail->quantity }} шт.</td>
                                             </tr>
                                         @empty
                                             <tr>
-                                                <td colspan="3" class="py-4 text-center text-gray-400">Нет данных об остатках</td>
+                                                <td colspan="2" class="py-4 text-center text-gray-400">Нет данных об остатках на физических складах</td>
                                             </tr>
                                         @endforelse
                                     </tbody>
                                 </table>
                             </div>
-                        ', ['sku' => $record])
+                        ', ['skuId' => $record->id]) // Передаем корректный ID для связи sku_id
                     ))
             ]);
     }
