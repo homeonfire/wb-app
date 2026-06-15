@@ -42,6 +42,7 @@ class SkuLogisticsRelationManager extends RelationManager
                     })
                     ->alignCenter(),
 
+                // 👇 Эта колонка берет сумму из warehouseStocks
                 Tables\Columns\TextColumn::make('wb_stock')
                     ->label('Остаток WB')
                     ->getStateUsing(fn (Sku $record) => $record->warehouseStocks->sum('quantity'))
@@ -107,7 +108,6 @@ class SkuLogisticsRelationManager extends RelationManager
                     ->weight('bold'),
             ])
             ->actions([
-                // 1 В 1 КОПИЯ ИЗ АНАЛИТИКИ ПО ТОВАРАМ
                 Tables\Actions\Action::make('view_warehouses')
                     ->label('Склады')
                     ->icon('heroicon-m-building-office-2')
@@ -123,30 +123,42 @@ class SkuLogisticsRelationManager extends RelationManager
                                     <thead>
                                         <tr class="border-b border-gray-200 dark:border-gray-700 text-gray-500">
                                             <th class="py-3 font-semibold text-left">Название склада</th>
-                                            <th class="py-3 font-semibold text-center w-32">Количество</th>
+                                            <th class="py-3 font-semibold text-center w-32">На WB (FBO)</th>
+                                            <th class="py-3 font-semibold text-center w-32">К клиенту</th>
                                         </tr>
                                     </thead>
                                     <tbody class="divide-y divide-gray-100 dark:divide-gray-800">
                                         @php
-                                            $details = \App\Models\SkuWarehouseDetail::where("sku_id", $skuId)
-                                                ->orderBy("quantity", "desc")
-                                                ->get();
+                                            // 👇 ГРУППИРОВКА КОЛЛЕКЦИИ: Суммируем все строки с одинаковым складом
+                                            $grouped = $sku->warehouseStocks
+                                                ->groupBy(function($item) {
+                                                    return empty($item->warehouse_name) ? "Склад не указан" : $item->warehouse_name;
+                                                })
+                                                ->map(function ($group, $name) {
+                                                    return (object) [
+                                                        "name" => $name,
+                                                        "qty" => $group->sum("quantity"),
+                                                        "in_way" => $group->sum("in_way_to_client")
+                                                    ];
+                                                })
+                                                ->sortByDesc("qty");
                                         @endphp
                                         
-                                        @forelse($details as $detail)
-                                            <tr>
-                                                <td class="py-3 text-left font-medium">{{ $detail->warehouse_name }}</td>
-                                                <td class="py-3 text-center font-bold text-primary-600">{{ $detail->quantity }} шт.</td>
+                                        @forelse($grouped as $detail)
+                                            <tr class="hover:bg-gray-50/50">
+                                                <td class="py-3 text-left font-medium text-gray-900 dark:text-white">{{ $detail->name }}</td>
+                                                <td class="py-3 text-center font-bold text-primary-600 dark:text-primary-400">{{ $detail->qty }} шт.</td>
+                                                <td class="py-3 text-center font-semibold text-blue-600 dark:text-blue-400">{{ $detail->in_way }} шт.</td>
                                             </tr>
                                         @empty
                                             <tr>
-                                                <td colspan="2" class="py-4 text-center text-gray-400">Нет данных об остатках на физических складах</td>
+                                                <td colspan="3" class="py-4 text-center text-gray-400">Нет данных об остатках</td>
                                             </tr>
                                         @endforelse
                                     </tbody>
                                 </table>
                             </div>
-                        ', ['skuId' => $record->id])
+                        ', ['sku' => $record])
                     ))
             ]);
     }
